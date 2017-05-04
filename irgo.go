@@ -30,7 +30,7 @@ func TODO(msg string, more ...interface{}) string { //TODOOK
 	_, fn, fl, _ := runtime.Caller(1)
 	fmt.Fprintf(os.Stderr, "%s:%d: %v\n", path.Base(fn), fl, fmt.Sprintf(msg, more...))
 	os.Stderr.Sync()
-	panic(fmt.Errorf("%s:%d: %v", path.Base(fn), fl, fmt.Sprintf(msg, more...)))
+	panic(fmt.Errorf("%s:%d: TODO %v", path.Base(fn), fl, fmt.Sprintf(msg, more...)))
 }
 
 type cname struct {
@@ -153,23 +153,43 @@ func (g *gen) pos(p token.Position) token.Position {
 	return p
 }
 
-func (g *gen) emit(m map[*gnode]struct{}, n *gnode, out *buffer.Bytes) {
+func (g *gen) expression(n *exprNode) {
+	switch x := n.Op.(type) {
+	case *ir.Call:
+		f := g.obj[x.Index].(*ir.FunctionDefinition)
+		g.w("// call %s\n", g.mangle(f.NameID, f.Linkage == ir.ExternalLinkage, -1))
+	case *ir.Drop:
+		g.w("// drop\n")
+	case *ir.Result:
+		g.w("// result\n")
+	case *ir.Variable:
+		g.w("// variable\n")
+	default:
+		TODO("%T", x)
+	}
+}
+
+func (g *gen) emit(m map[*codeNode]struct{}, n *codeNode, out *buffer.Bytes) {
 	if _, ok := m[n]; ok {
 		return
 	}
 
 	m[n] = struct{}{}
-	for _, op := range n.Ops {
+	for i, op := range n.Ops {
 		switch x := op.(type) {
-		case *ir.Arguments:
-			if x.FunctionPointer {
-				TODO("")
-				break
-			}
-
-			TODO("%v", pretty(n))
-		case *ir.BeginScope:
-			// nop
+		case nil:
+			g.expression(n.Expressions[i])
+		case *ir.Return:
+			g.w("return\n")
+		case
+			*ir.AllocResult,
+			*ir.Arguments,
+			*ir.BeginScope,
+			*ir.EndScope:
+			//nop
+		case
+			*ir.VariableDeclaration:
+			// TODO
 		default:
 			TODO("%T", x)
 		}
@@ -203,7 +223,8 @@ func (g *gen) functionDefinition(oi int, f *ir.FunctionDefinition) {
 		}
 	}
 	g.w("{ // %v\n", g.pos(f.Position))
-	root := newGraph(g, f.Body)
+	g.w("panic(\"TODO181\")\n")
+	root := newCodeGraph(g, f.Body)
 	switch root.size() {
 	case 0:
 		panic("internal error")
@@ -212,8 +233,7 @@ func (g *gen) functionDefinition(oi int, f *ir.FunctionDefinition) {
 	default:
 		TODO("")
 	}
-	g.emit(map[*gnode]struct{}{}, root, g.out)
-	g.w("panic(\"TODO181\")\n")
+	g.emit(map[*codeNode]struct{}{}, root, g.out)
 	g.w("}\n\n")
 }
 

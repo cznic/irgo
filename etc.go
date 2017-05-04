@@ -5,7 +5,6 @@
 package irgo
 
 import (
-	"fmt"
 	"go/token"
 	"reflect"
 	"sort"
@@ -37,9 +36,7 @@ var (
 	}
 )
 
-func pretty(v interface{}) string {
-	return strutil.PrettyString(v, "", "", hooks)
-}
+func pretty(v interface{}) string { return strutil.PrettyString(v, "", "", hooks) }
 
 type stackItem struct {
 	ir.TypeID
@@ -53,34 +50,34 @@ func (s stack) push(v stackItem) stack  { return append(s[:len(s):len(s)], v) }
 func (s stack) pushT(t ir.TypeID) stack { return append(s[:len(s):len(s)], stackItem{TypeID: t}) }
 func (s stack) tos() stackItem          { return s[len(s)-1] }
 
-type enode struct {
+type exprNode struct {
 	Op     ir.Operation
-	Childs []*enode
+	Childs exprList
 }
 
-type enodes []*enode
+type exprList []*exprNode
 
-func (p *enodes) op(op ir.Operation, childs []*enode) { p.push(&enode{Op: op, Childs: childs}) }
-func (p *enodes) operand(op ir.Operation)             { p.push(&enode{Op: op}) }
-func (p *enodes) push(e *enode)                       { *p = append(*p, e) }
-func (p *enodes) unop(op ir.Operation)                { p.op(op, []*enode{p.pop()}) }
-func (p enodes) String() string                       { return pretty(p) }
+func (p *exprList) op(op ir.Operation, childs exprList) { p.push(&exprNode{Op: op, Childs: childs}) }
+func (p *exprList) operand(op ir.Operation)             { p.push(&exprNode{Op: op}) }
+func (p *exprList) push(e *exprNode)                    { *p = append(*p, e) }
+func (p *exprList) unop(op ir.Operation)                { p.op(op, exprList{p.pop()}) }
+func (p exprList) String() string                       { return pretty(p) }
 
-func (p *enodes) pop() *enode {
+func (p *exprList) pop() *exprNode {
 	s := *p
 	r := s[len(s)-1]
 	*p = s[:len(s)-1]
 	return r
 }
 
-type gnode struct {
-	Expressions []*enode
-	in, out     []*gnode
+type codeNode struct {
+	Expressions exprList
+	in, out     []*codeNode
 	Ops         []ir.Operation
 	stacks      []stack
 }
 
-func (n *gnode) size0(m map[*gnode]struct{}) int {
+func (n *codeNode) size0(m map[*codeNode]struct{}) int {
 	if _, ok := m[n]; ok {
 		return 0
 	}
@@ -93,12 +90,12 @@ func (n *gnode) size0(m map[*gnode]struct{}) int {
 	return r
 }
 
-type graph struct {
+type codeGraph struct {
 	*gen
 	ir.TypeCache
 }
 
-func (n *gnode) size() int { return n.size0(map[*gnode]struct{}{}) }
+func (n *codeNode) size() int { return n.size0(map[*codeNode]struct{}{}) }
 
 func splitPoints(ops []ir.Operation) sort.IntSlice {
 	a := sort.IntSlice{0}
@@ -142,9 +139,9 @@ func splitPoints(ops []ir.Operation) sort.IntSlice {
 	return a[:sortutil.Dedupe(a)]
 }
 
-func (g *graph) addEdges(nodes []*gnode) *gnode {
+func (g *codeGraph) addEdges(nodes []*codeNode) *codeNode {
 	// Collect symbol table.
-	labels := map[int]*gnode{}
+	labels := map[int]*codeNode{}
 	for _, v := range nodes {
 		if x, ok := v.Ops[0].(*ir.Label); ok {
 			n := int(x.NameID)
@@ -186,9 +183,9 @@ func (g *graph) addEdges(nodes []*gnode) *gnode {
 	return nodes[0]
 }
 
-func (g *graph) ptrID(t ir.TypeID) ir.TypeID { return g.MustType(t).Pointer().ID() }
+func (g *codeGraph) ptrID(t ir.TypeID) ir.TypeID { return g.MustType(t).Pointer().ID() }
 
-func (g *graph) qptrID(t ir.TypeID, address bool) ir.TypeID {
+func (g *codeGraph) qptrID(t ir.TypeID, address bool) ir.TypeID {
 	if address {
 		return g.ptrID(t)
 	}
@@ -196,7 +193,7 @@ func (g *graph) qptrID(t ir.TypeID, address bool) ir.TypeID {
 	return t
 }
 
-func (g *graph) computeStackStates(m map[*gnode]struct{}, n *gnode, stack stack) *gnode {
+func (g *codeGraph) computeStackStates(m map[*codeNode]struct{}, n *codeNode, stack stack) *codeNode {
 	if _, ok := m[n]; ok {
 		return n
 	}
@@ -248,46 +245,56 @@ func (g *graph) computeStackStates(m map[*gnode]struct{}, n *gnode, stack stack)
 	return n
 }
 
-func (g *graph) processExpressionList(ops []ir.Operation) (l enodes, _ int) {
+func (g *codeGraph) processExpressionList(ops []ir.Operation) (l exprList, _ int) {
 	for i, op := range ops {
 		switch x := op.(type) {
-		case *ir.Arguments:
-			return l, i
 		case *ir.Call:
-			t := g.MustType(x.TypeID).(*ir.FunctionType)
-			r := t.Results
-			if len(r) != 0 {
-				TODO("%v", r)
-				break
+			s := len(l) - x.Arguments
+			args := l[s:]
+			l = l[:s:s]
+			l.op(x, args)
+			if len(g.tc.MustType(x.TypeID).(*ir.FunctionType).Results) == 0 {
+				return l, i + 1
 			}
-
-			return l, i
 		case *ir.CallFP:
-			t := g.MustType(x.TypeID).(*ir.PointerType).Element.(*ir.FunctionType)
-			r := t.Results
-			if len(r) != 0 {
-				s := len(l) - x.Arguments
-				ch := l[s:]
-				l = l[:s:s]
-				l.op(x, ch)
-				break
+			s := len(l) - x.Arguments - 1
+			args := l[s:]
+			l = l[:s:s]
+			l.op(x, args)
+			if len(g.tc.MustType(x.TypeID).(*ir.PointerType).Element.(*ir.FunctionType).Results) == 0 {
+				return l, i + 1
 			}
-
-			TODO("%v", r)
-		case *ir.Convert:
+		case
+			*ir.Convert,
+			*ir.Drop,
+			*ir.Store:
 			l.unop(x)
 		case
 			*ir.Argument,
-			*ir.Global:
+			*ir.Const32,
+			*ir.Global,
+			*ir.Result,
+			*ir.StringConst,
+			*ir.Variable:
+
 			l.operand(x)
+		case
+			*ir.Return,
+			*ir.VariableDeclaration:
+			return l, i + 1
+		case
+			*ir.AllocResult,
+			*ir.Arguments,
+			*ir.BeginScope:
+			// nop
 		default:
-			TODO("%T", x)
+			TODO("%s: %T", x.Pos(), x)
 		}
 	}
 	panic("TODO")
 }
 
-func (g *graph) processExpressions(m map[*gnode]struct{}, n *gnode) *gnode {
+func (g *codeGraph) processExpressions(m map[*codeNode]struct{}, n *codeNode) *codeNode {
 	if _, ok := m[n]; ok {
 		return n
 	}
@@ -297,53 +304,53 @@ func (g *graph) processExpressions(m map[*gnode]struct{}, n *gnode) *gnode {
 		TODO("")
 	}
 
-	fmt.Println(pretty(n)) //TODO-
-	for i := 0; i < len(n.Ops); i++ {
+	for i := 0; i < len(n.Ops); {
 		switch x := n.Ops[i].(type) {
 		case
 			*ir.Argument,
-			*ir.Global:
+			*ir.Global,
+			*ir.Result,
+			*ir.StringConst,
+			*ir.Variable:
 			// Start of an expression or expression list.
 			l, nodes := g.processExpressionList(n.Ops[i:])
 			tail := append([]ir.Operation(nil), n.Ops[i+nodes:]...)
-			n.Ops = n.Ops[:i:i]
-			n.Expressions = append(n.Expressions[:i:i], l...)
-			for range l {
-				n.Ops = append(n.Ops, nil)
-				//TODO 	n.Expressions[i+j] = v
-			}
+			copy(n.Expressions[i:], l)
+			n.Ops = append(n.Ops[:i:i], make([]ir.Operation, len(l))...)
+			i = len(n.Ops)
 			n.Ops = append(n.Ops, tail...)
-			//TODO i += nodes
-			_ = l
-			return n
 		case
+			*ir.AllocResult,
 			*ir.Arguments,
 			*ir.BeginScope,
-			*ir.EndScope:
-			// nop
+			*ir.EndScope,
+			*ir.Return,
+			*ir.VariableDeclaration:
+
+			i++
 		default:
-			TODO("%T", x)
+			TODO("%s: %T", x.Pos(), x)
 		}
 	}
 	return n
 }
 
-func newGraph(gen *gen, ops []ir.Operation) *gnode {
-	g := &graph{
+func newCodeGraph(gen *gen, ops []ir.Operation) *codeNode {
+	g := &codeGraph{
 		TypeCache: gen.tc,
 		gen:       gen,
 	}
 	a := append(splitPoints(ops), len(ops))
-	var nodes []*gnode
+	var nodes []*codeNode
 	for i := range a[1:] {
-		nodes = append(nodes, &gnode{
-			Expressions: make([]*enode, a[i+1]-a[i]),
+		nodes = append(nodes, &codeNode{
+			Expressions: make(exprList, a[i+1]-a[i]),
 			Ops:         ops[a[i]:a[i+1]],
 		})
 	}
 	root := g.addEdges(nodes)
-	root = g.computeStackStates(map[*gnode]struct{}{}, root, stack{})
-	root = g.processExpressions(map[*gnode]struct{}{}, root)
+	root = g.computeStackStates(map[*codeNode]struct{}{}, root, stack{})
+	root = g.processExpressions(map[*codeNode]struct{}{}, root)
 	return root
 }
 
