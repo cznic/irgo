@@ -58,7 +58,7 @@ func newGen(obj []ir.Object, qualifier func(*ir.FunctionDefinition) string) *gen
 	}
 }
 
-func (g *gen) mangle(nm ir.NameID, exported bool) ir.NameID {
+func (g *gen) mangle(nm ir.NameID, exported bool, index int) ir.NameID {
 	k := cname{nm, exported}
 	if x, ok := g.mangled[k]; ok {
 		return x
@@ -70,8 +70,15 @@ func (g *gen) mangle(nm ir.NameID, exported bool) ir.NameID {
 
 	switch {
 	case exported:
+		if index >= 0 {
+			panic("internal error")
+		}
+
 		buf.WriteByte('X')
 	default:
+		if index >= 0 {
+			fmt.Fprintf(&buf, "_%v", index)
+		}
 		buf.WriteByte('_')
 	}
 
@@ -146,6 +153,29 @@ func (g *gen) pos(p token.Position) token.Position {
 	return p
 }
 
+func (g *gen) emit(m map[*gnode]struct{}, n *gnode, out *buffer.Bytes) {
+	if _, ok := m[n]; ok {
+		return
+	}
+
+	m[n] = struct{}{}
+	for _, op := range n.Ops {
+		switch x := op.(type) {
+		case *ir.Arguments:
+			if x.FunctionPointer {
+				TODO("")
+				break
+			}
+
+			TODO("%v", pretty(n))
+		case *ir.BeginScope:
+			// nop
+		default:
+			TODO("%T", x)
+		}
+	}
+}
+
 func (g *gen) functionDefinition(oi int, f *ir.FunctionDefinition) {
 	if _, ok := g.isBuiltin(oi); ok {
 		return
@@ -155,7 +185,7 @@ func (g *gen) functionDefinition(oi int, f *ir.FunctionDefinition) {
 
 	defer buf.Close()
 
-	g.w("func %v(", g.mangle(f.NameID, f.Linkage == ir.ExternalLinkage))
+	g.w("func %v(", g.mangle(f.NameID, f.Linkage == ir.ExternalLinkage, -1))
 	t := g.tc.MustType(f.TypeID).(*ir.FunctionType)
 	switch {
 	case f.NameID == idMain && len(t.Arguments) != 2:
@@ -163,7 +193,7 @@ func (g *gen) functionDefinition(oi int, f *ir.FunctionDefinition) {
 	default:
 		for i, v := range t.Arguments {
 			if i < len(f.Arguments) {
-				g.w("%v ", g.mangle(f.Arguments[i], false))
+				g.w("%v ", g.mangle(f.Arguments[i], false, -1))
 			}
 			g.w("%s,", g.typ(v))
 		}
@@ -173,7 +203,16 @@ func (g *gen) functionDefinition(oi int, f *ir.FunctionDefinition) {
 		}
 	}
 	g.w("{ // %v\n", g.pos(f.Position))
-	_ = newGraph(f.Body)
+	root := newGraph(g, f.Body)
+	switch root.size() {
+	case 0:
+		panic("internal error")
+	case 1:
+		// ok
+	default:
+		TODO("")
+	}
+	g.emit(map[*gnode]struct{}{}, root, g.out)
 	g.w("panic(\"TODO181\")\n")
 	g.w("}\n\n")
 }
@@ -184,7 +223,7 @@ func (g *gen) gen() error {
 		case *ir.FunctionDefinition:
 			g.functionDefinition(i, x)
 		case *ir.DataDefinition:
-			g.w("// %s: %s TODO191\n", x.Position, g.mangle(x.NameID, x.Linkage == ir.ExternalLinkage))
+			g.w("// %s: %s TODO191\n", x.Position, g.mangle(x.NameID, x.Linkage == ir.ExternalLinkage, -1))
 		default:
 			panic("internal error")
 		}
