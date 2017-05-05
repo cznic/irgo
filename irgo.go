@@ -15,7 +15,13 @@ import (
 
 	"github.com/cznic/internal/buffer"
 	"github.com/cznic/ir"
+	"github.com/cznic/mathutil"
 	"github.com/cznic/xc"
+)
+
+const (
+	mallocAllign = 2 * ptrSize
+	ptrSize      = mathutil.UintPtrBits / 8
 )
 
 var (
@@ -63,6 +69,8 @@ type gen struct {
 	obj       []ir.Object
 	out       *buffer.Bytes
 	qualifier func(*ir.FunctionDefinition) string
+	strTab    map[ir.StringID]int
+	strings   buffer.Bytes
 	tc        ir.TypeCache
 }
 
@@ -73,6 +81,7 @@ func newGen(obj []ir.Object, qualifier func(*ir.FunctionDefinition) string) *gen
 		obj:       obj,
 		out:       &buffer.Bytes{},
 		qualifier: qualifier,
+		strTab:    map[ir.StringID]int{},
 		tc:        ir.TypeCache{},
 	}
 }
@@ -178,6 +187,21 @@ func (g *gen) pos(p token.Position) token.Position {
 	return p
 }
 
+func (g *gen) string(n ir.StringID) int {
+	if x, ok := g.strTab[n]; ok {
+		return x
+	}
+
+	x := roundup(g.strings.Len(), mallocAllign)
+	for g.strings.Len() < x {
+		g.strings.WriteByte(0)
+	}
+	g.strTab[n] = x
+	g.strings.Write(dict.S(int(n)))
+	g.strings.WriteByte(0)
+	return x
+}
+
 func (g *gen) expression(p, n *exprNode) {
 	switch x := n.Op.(type) {
 	case *ir.Argument:
@@ -255,7 +279,7 @@ func (g *gen) expression(p, n *exprNode) {
 
 		TODO("%s", x.Pos())
 	case *ir.StringConst:
-		g.w(` 0 /*TODO258*/ `)
+		g.w(" uintptr(unsafe.Pointer(&strTab[%v]))", g.string(x.Value))
 	case *ir.Variable:
 		sc := g.f.varDeclScopes[x.Index]
 		if sc == 0 {
@@ -409,6 +433,22 @@ func (g *gen) gen() error {
 		default:
 			panic("internal error")
 		}
+	}
+	if g.strings.Len() != 0 {
+		g.w("var strTab = []byte(\"")
+		for _, v := range g.strings.Bytes() {
+			switch {
+			case v == '\\':
+				g.out.WriteString(`\\`)
+			case v == '"':
+				g.out.WriteString(`\"`)
+			case v < ' ', v >= 0x7f:
+				fmt.Fprintf(g.out, `\x%02x`, v)
+			default:
+				g.out.WriteByte(v)
+			}
+		}
+		g.w("\")\n")
 	}
 	return nil
 }

@@ -394,3 +394,6 @@ func varInfo(ops []ir.Operation) (decls []*ir.VariableDeclaration, scopes []int)
 	}
 	return decls, scopes
 }
+
+// if n%m != 0 { n += m-n%m }. m must be a power of 2.
+func roundup(n, m int) int { return (n + m - 1) &^ (m - 1) }
