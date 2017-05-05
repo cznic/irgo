@@ -38,6 +38,20 @@ var (
 
 func pretty(v interface{}) string { return strutil.PrettyString(v, "", "", hooks) }
 
+type operation interface {
+	Pos() token.Position
+}
+
+type expr struct {
+	Expr *exprNode
+	token.Position
+}
+
+func newExpr(n *exprNode, pos token.Position) *expr { return &expr{n, pos} }
+
+// Pos implements operation.
+func (e *expr) Pos() token.Position { return e.Position }
+
 type stackItem struct {
 	ir.TypeID
 	value ir.Value
@@ -51,17 +65,23 @@ func (s stack) pushT(t ir.TypeID) stack { return append(s[:len(s):len(s)], stack
 func (s stack) tos() stackItem          { return s[len(s)-1] }
 
 type exprNode struct {
-	Op     ir.Operation
+	Op     operation
 	Childs exprList
 }
 
 type exprList []*exprNode
 
-func (p *exprList) op(op ir.Operation, childs exprList) { p.push(&exprNode{Op: op, Childs: childs}) }
-func (p *exprList) operand(op ir.Operation)             { p.push(&exprNode{Op: op}) }
-func (p *exprList) push(e *exprNode)                    { *p = append(*p, e) }
-func (p *exprList) unop(op ir.Operation)                { p.op(op, exprList{p.pop()}) }
-func (p exprList) String() string                       { return pretty(p) }
+func (p *exprList) op(op operation, childs exprList) { p.push(&exprNode{Op: op, Childs: childs}) }
+func (p *exprList) operand(op operation)             { p.push(&exprNode{Op: op}) }
+func (p *exprList) push(e *exprNode)                 { *p = append(*p, e) }
+func (p *exprList) unop(op operation)                { p.op(op, exprList{p.pop()}) }
+func (p exprList) String() string                    { return pretty(p) }
+
+func (p *exprList) binop(op ir.Operation) {
+	b := p.pop()
+	a := p.pop()
+	p.op(op, exprList{a, b})
+}
 
 func (p *exprList) pop() *exprNode {
 	s := *p
@@ -71,10 +91,9 @@ func (p *exprList) pop() *exprNode {
 }
 
 type codeNode struct {
-	Expressions exprList
-	in, out     []*codeNode
-	Ops         []ir.Operation
-	stacks      []stack
+	in, out []*codeNode
+	Ops     []operation
+	stacks  []stack
 }
 
 func (n *codeNode) size0(m map[*codeNode]struct{}) int {
@@ -133,7 +152,7 @@ func splitPoints(ops []ir.Operation) sort.IntSlice {
 			*ir.VariableDeclaration:
 			// nop
 		default:
-			TODO("%T", x)
+			TODO("%s: %T", x.Pos(), x)
 		}
 	}
 	return a[:sortutil.Dedupe(a)]
@@ -176,7 +195,7 @@ func (g *codeGraph) addEdges(nodes []*codeNode) *codeNode {
 				*ir.VariableDeclaration:
 				// nop
 			default:
-				TODO("%T", x)
+				TODO("%s: %T", x.Pos(), x)
 			}
 		}
 	}
@@ -238,14 +257,14 @@ func (g *codeGraph) computeStackStates(m map[*codeNode]struct{}, n *codeNode, st
 			*ir.VariableDeclaration:
 			// nop
 		default:
-			TODO("%T", x)
+			TODO("%s: %T", x.Pos(), x)
 		}
 		n.stacks = append(n.stacks, stack)
 	}
 	return n
 }
 
-func (g *codeGraph) processExpressionList(ops []ir.Operation) (l exprList, _ int) {
+func (g *codeGraph) processExpressionList(ops []operation) (l exprList, _ int) {
 	for i, op := range ops {
 		switch x := op.(type) {
 		case *ir.Call:
@@ -266,9 +285,11 @@ func (g *codeGraph) processExpressionList(ops []ir.Operation) (l exprList, _ int
 			}
 		case
 			*ir.Convert,
-			*ir.Drop,
-			*ir.Store:
+			*ir.Drop:
+
 			l.unop(x)
+		case *ir.Store:
+			l.binop(x)
 		case
 			*ir.Argument,
 			*ir.Const32,
@@ -281,7 +302,7 @@ func (g *codeGraph) processExpressionList(ops []ir.Operation) (l exprList, _ int
 		case
 			*ir.Return,
 			*ir.VariableDeclaration:
-			return l, i + 1
+			return l, i
 		case
 			*ir.AllocResult,
 			*ir.Arguments,
@@ -304,6 +325,7 @@ func (g *codeGraph) processExpressions(m map[*codeNode]struct{}, n *codeNode) *c
 		TODO("")
 	}
 
+	var out []operation
 	for i := 0; i < len(n.Ops); {
 		switch x := n.Ops[i].(type) {
 		case
@@ -314,11 +336,10 @@ func (g *codeGraph) processExpressions(m map[*codeNode]struct{}, n *codeNode) *c
 			*ir.Variable:
 			// Start of an expression or expression list.
 			l, nodes := g.processExpressionList(n.Ops[i:])
-			tail := append([]ir.Operation(nil), n.Ops[i+nodes:]...)
-			copy(n.Expressions[i:], l)
-			n.Ops = append(n.Ops[:i:i], make([]ir.Operation, len(l))...)
-			i = len(n.Ops)
-			n.Ops = append(n.Ops, tail...)
+			for _, v := range l {
+				out = append(out, newExpr(v, x.Pos()))
+			}
+			i += nodes
 		case
 			*ir.AllocResult,
 			*ir.Arguments,
@@ -327,11 +348,13 @@ func (g *codeGraph) processExpressions(m map[*codeNode]struct{}, n *codeNode) *c
 			*ir.Return,
 			*ir.VariableDeclaration:
 
+			out = append(out, x)
 			i++
 		default:
 			TODO("%s: %T", x.Pos(), x)
 		}
 	}
+	n.Ops = out
 	return n
 }
 
@@ -343,10 +366,12 @@ func newCodeGraph(gen *gen, ops []ir.Operation) *codeNode {
 	a := append(splitPoints(ops), len(ops))
 	var nodes []*codeNode
 	for i := range a[1:] {
-		nodes = append(nodes, &codeNode{
-			Expressions: make(exprList, a[i+1]-a[i]),
-			Ops:         ops[a[i]:a[i+1]],
-		})
+		m, n := a[i], a[i+1]
+		out := make([]operation, n-m)
+		for i, v := range ops {
+			out[i] = v
+		}
+		nodes = append(nodes, &codeNode{Ops: out})
 	}
 	root := g.addEdges(nodes)
 	root = g.computeStackStates(map[*codeNode]struct{}{}, root, stack{})
@@ -354,8 +379,7 @@ func newCodeGraph(gen *gen, ops []ir.Operation) *codeNode {
 	return root
 }
 
-func computeVarDeclScopes(ops []ir.Operation) map[*ir.VariableDeclaration]int {
-	r := map[*ir.VariableDeclaration]int{}
+func varInfo(ops []ir.Operation) (decls []*ir.VariableDeclaration, scopes []int) {
 	n := -1
 	for _, op := range ops {
 		switch x := op.(type) {
@@ -364,8 +388,9 @@ func computeVarDeclScopes(ops []ir.Operation) map[*ir.VariableDeclaration]int {
 		case *ir.EndScope:
 			n++
 		case *ir.VariableDeclaration:
-			r[x] = n
+			decls = append(decls, x)
+			scopes = append(scopes, n)
 		}
 	}
-	return r
+	return decls, scopes
 }
