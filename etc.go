@@ -15,7 +15,8 @@ import (
 )
 
 var (
-	idMain = ir.NameID(dict.SID("main"))
+	idInt32 = ir.TypeID(dict.SID("main"))
+	idMain  = ir.NameID(dict.SID("main"))
 
 	hooks = strutil.PrettyPrintHooks{
 		reflect.TypeOf(ir.NameID(0)): func(f strutil.Formatter, v interface{}, prefix string, suffix string) {
@@ -54,7 +55,7 @@ func (e *expr) Pos() token.Position { return e.Position }
 
 type stackItem struct {
 	ir.TypeID
-	value ir.Value
+	Value ir.Value
 }
 
 type stack []stackItem
@@ -65,8 +66,16 @@ func (s stack) pushT(t ir.TypeID) stack { return append(s[:len(s):len(s)], stack
 func (s stack) tos() stackItem          { return s[len(s)-1] }
 
 type exprNode struct {
-	Op     operation
 	Childs exprList
+	Op     operation
+	Parent *exprNode //TODO not used.
+}
+
+func (e *exprNode) tree() string {
+	for e.Parent != nil {
+		e = e.Parent
+	}
+	return pretty(e)
 }
 
 type exprList []*exprNode
@@ -77,7 +86,7 @@ func (p *exprList) push(e *exprNode)                 { *p = append(*p, e) }
 func (p *exprList) unop(op operation)                { p.op(op, exprList{p.pop()}) }
 func (p exprList) String() string                    { return pretty(p) }
 
-func (p *exprList) binop(op ir.Operation) {
+func (p *exprList) binop(op operation) {
 	b := p.pop()
 	a := p.pop()
 	p.op(op, exprList{a, b})
@@ -91,9 +100,10 @@ func (p *exprList) pop() *exprNode {
 }
 
 type codeNode struct {
-	in, out []*codeNode
-	Ops     []operation
-	stacks  []stack
+	Fallthrough *codeNode
+	In, Out     []*codeNode
+	Ops         []operation
+	Stacks      []stack //TODO not used.
 }
 
 func (n *codeNode) size0(m map[*codeNode]struct{}) int {
@@ -103,7 +113,7 @@ func (n *codeNode) size0(m map[*codeNode]struct{}) int {
 
 	m[n] = struct{}{}
 	r := 1
-	for _, v := range n.out {
+	for _, v := range n.Out {
 		r += v.size0(m)
 	}
 	return r
@@ -118,22 +128,22 @@ func (n *codeNode) size() int { return n.size0(map[*codeNode]struct{}{}) }
 
 func splitPoints(ops []ir.Operation) sort.IntSlice {
 	a := sort.IntSlice{0}
-	for _, op := range ops {
+	for i, op := range ops {
 		switch x := op.(type) {
-		//TODO case
-		//TODO 	*ir.Jmp,
-		//TODO 	*ir.JmpP,
-		//TODO 	*ir.Jnz,
-		//TODO 	*ir.Jz,
-		//TODO 	*ir.Return:
-		//TODO 	a = append(a, i+1)
-		//TODO case *ir.Label:
-		//TODO 	a = append(a, i)
-		//TODO case *ir.Switch:
-		//TODO 	a = append(a, i)
-		//TODO 	a = append(a, i+1)
 		case
+			//TODO 	*ir.JmpP,
+			*ir.Jmp,
+			*ir.Jz,
+			*ir.Jnz,
+			*ir.Return,
+			*ir.Switch:
+			a = append(a, i+1)
+		case *ir.Label:
+			a = append(a, i)
+		case
+			*ir.Add,
 			*ir.AllocResult,
+			*ir.And,
 			*ir.Argument,
 			*ir.Arguments,
 			*ir.BeginScope,
@@ -141,15 +151,28 @@ func splitPoints(ops []ir.Operation) sort.IntSlice {
 			*ir.CallFP,
 			*ir.Const32,
 			*ir.Convert,
+			*ir.Div,
 			*ir.Drop,
+			*ir.Element,
 			*ir.EndScope,
+			*ir.Eq,
+			*ir.Field,
+			*ir.Geq,
 			*ir.Global,
+			*ir.Leq,
+			*ir.Load,
+			*ir.Lt,
+			*ir.Mul,
+			*ir.Neq,
+			*ir.Or,
+			*ir.PostIncrement,
 			*ir.Result,
-			*ir.Return,
 			*ir.Store,
 			*ir.StringConst,
+			*ir.Sub,
 			*ir.Variable,
-			*ir.VariableDeclaration:
+			*ir.VariableDeclaration,
+			*ir.Xor:
 			// nop
 		default:
 			TODO("%s: %T", x.Pos(), x)
@@ -158,24 +181,70 @@ func splitPoints(ops []ir.Operation) sort.IntSlice {
 	return a[:sortutil.Dedupe(a)]
 }
 
-func (g *codeGraph) addEdges(nodes []*codeNode) *codeNode {
+func (g *codeGraph) branch(src, dest *codeNode) {
+	src.Out = append(src.Out, dest)
+	dest.In = append(dest.In, src)
+}
+
+func (g *codeGraph) addEdges(nodes []*codeNode) (root *codeNode, labelsUsed map[int]struct{}) {
 	// Collect symbol table.
-	labels := map[int]*codeNode{}
+	label2codeNode := map[int]*codeNode{}
+	labelsUsed = map[int]struct{}{}
 	for _, v := range nodes {
 		if x, ok := v.Ops[0].(*ir.Label); ok {
 			n := int(x.NameID)
 			if n == 0 {
 				n = -x.Number
 			}
-			labels[n] = v
+			label2codeNode[n] = v
 		}
 	}
 
 	// Complete the graph.
-	for _, node := range nodes {
-		for _, op := range node.Ops {
+	for i, node := range nodes {
+		var op operation
+		for _, op = range node.Ops {
 			switch x := op.(type) {
+			case *ir.Jmp:
+				n := int(x.NameID)
+				if n == 0 {
+					n = -x.Number
+				}
+				labelsUsed[n] = struct{}{}
+				g.branch(node, label2codeNode[n])
+			case *ir.Jz:
+				n := int(x.NameID)
+				if n == 0 {
+					n = -x.Number
+				}
+				labelsUsed[n] = struct{}{}
+				g.branch(node, label2codeNode[n])
+				g.branch(node, nodes[i+1])
+			case *ir.Jnz:
+				n := int(x.NameID)
+				if n == 0 {
+					n = -x.Number
+				}
+				labelsUsed[n] = struct{}{}
+				g.branch(node, label2codeNode[n])
+				g.branch(node, nodes[i+1])
+			case *ir.Switch:
+				for _, v := range x.Labels {
+					n := int(v.NameID)
+					if n == 0 {
+						n = -v.Number
+					}
+					labelsUsed[n] = struct{}{}
+					g.branch(node, label2codeNode[n])
+				}
+				n := int(x.Default.NameID)
+				if n == 0 {
+					n = -x.Default.Number
+				}
+				labelsUsed[n] = struct{}{}
+				g.branch(node, label2codeNode[n])
 			case
+				*ir.Add,
 				*ir.AllocResult,
 				*ir.Argument,
 				*ir.Arguments,
@@ -185,12 +254,22 @@ func (g *codeGraph) addEdges(nodes []*codeNode) *codeNode {
 				*ir.Const32,
 				*ir.Convert,
 				*ir.Drop,
+				*ir.Element,
 				*ir.EndScope,
+				*ir.Field,
+				*ir.Geq,
 				*ir.Global,
+				*ir.Label,
+				*ir.Leq,
+				*ir.Load,
+				*ir.Lt,
+				*ir.Mul,
+				*ir.PostIncrement,
 				*ir.Result,
 				*ir.Return,
 				*ir.Store,
 				*ir.StringConst,
+				*ir.Sub,
 				*ir.Variable,
 				*ir.VariableDeclaration:
 				// nop
@@ -198,8 +277,26 @@ func (g *codeGraph) addEdges(nodes []*codeNode) *codeNode {
 				TODO("%s: %T", x.Pos(), x)
 			}
 		}
+		if i+1 < len(nodes) {
+			switch x := op.(type) {
+			case
+				*ir.Drop,
+				*ir.EndScope,
+				*ir.Jnz,
+				*ir.Jz:
+				node.Fallthrough = nodes[i+1]
+			case
+				*ir.BeginScope,
+				*ir.Jmp,
+				*ir.Return,
+				*ir.Switch:
+				// nop
+			default:
+				TODO("%s: %T", x.Pos(), x)
+			}
+		}
 	}
-	return nodes[0]
+	return nodes[0], labelsUsed
 }
 
 func (g *codeGraph) ptrID(t ir.TypeID) ir.TypeID { return g.MustType(t).Pointer().ID() }
@@ -212,7 +309,11 @@ func (g *codeGraph) qptrID(t ir.TypeID, address bool) ir.TypeID {
 	return t
 }
 
-func (g *codeGraph) computeStackStates(m map[*codeNode]struct{}, n *codeNode, stack stack) *codeNode {
+func (g *codeGraph) computeStackStates(m map[*codeNode]struct{}, n *codeNode, s stack) *codeNode {
+	if n == nil {
+		return nil
+	}
+
 	if _, ok := m[n]; ok {
 		return n
 	}
@@ -220,46 +321,91 @@ func (g *codeGraph) computeStackStates(m map[*codeNode]struct{}, n *codeNode, st
 	m[n] = struct{}{}
 	for _, op := range n.Ops {
 		switch x := op.(type) {
+		case *ir.Add:
+			s = s.pop().pop().pushT(x.TypeID)
 		case *ir.AllocResult:
-			stack = stack.pushT(x.TypeID)
+			s = s.pushT(x.TypeID)
 		case *ir.Argument:
-			stack = stack.pushT(g.qptrID(x.TypeID, x.Address))
+			s = s.pushT(g.qptrID(x.TypeID, x.Address))
 		case *ir.Call:
 			for i := 0; i < x.Arguments; i++ {
-				stack = stack.pop()
+				s = s.pop()
 			}
 		case *ir.CallFP:
 			for i := 0; i < x.Arguments+1; i++ {
-				stack = stack.pop()
+				s = s.pop()
 			}
 		case *ir.Const32:
-			stack = stack.pop().push(stackItem{TypeID: x.TypeID, value: &ir.Int32Value{Value: x.Value}})
+			s = s.push(stackItem{TypeID: x.TypeID, Value: &ir.Int32Value{Value: x.Value}})
 		case *ir.Convert:
-			stack = stack.pop().pushT(x.Result)
+			s = s.pop().pushT(x.Result)
 		case *ir.Drop:
-			stack = stack.pop()
+			s = s.pop()
+		case *ir.Element:
+			t := g.tc.MustType(x.TypeID).(*ir.PointerType).Element
+			s = s.pop().pushT(t.ID())
+		case *ir.Field:
+			t := g.tc.MustType(x.TypeID).(*ir.PointerType).Element.(*ir.StructOrUnionType)
+			ft := t.Fields[x.Index]
+			if x.Address {
+				ft = ft.Pointer()
+			}
+			s = s.pop().pushT(ft.ID())
 		case *ir.Global:
-			stack = stack.pushT(g.qptrID(x.TypeID, x.Address))
+			s = s.pushT(g.qptrID(x.TypeID, x.Address))
+		case *ir.Jmp:
+			// nop
+		case *ir.Jnz:
+			s = s.pop()
+		case *ir.Jz:
+			s = s.pop()
+		case
+			*ir.Geq,
+			*ir.Leq,
+			*ir.Lt:
+			s = s.pop().pop().pushT(idInt32)
+		case *ir.Load:
+			v := s.tos()
+			s = s.pop().pushT(g.tc.MustType(v.TypeID).(*ir.PointerType).Element.ID())
+		case *ir.Mul:
+			s = s.pop().pop().pushT(x.TypeID)
+		case *ir.PostIncrement:
+			if x.Bits != 0 {
+				TODO("%s", x.Pos())
+				break
+			}
+
+			s = s.pop().pushT(x.TypeID)
 		case *ir.Result:
-			stack = stack.pushT(g.qptrID(x.TypeID, x.Address))
+			s = s.pushT(g.qptrID(x.TypeID, x.Address))
 		case *ir.Store:
-			v := stack.tos()
-			stack = stack.pop().push(v)
+			v := s.tos()
+			s = s.pop().push(v)
 		case *ir.StringConst:
-			stack = stack.pushT(x.TypeID)
+			s = s.pushT(x.TypeID)
+		case *ir.Sub:
+			s = s.pop().pop().pushT(x.TypeID)
+		case *ir.Switch:
+			s = s.pop()
 		case *ir.Variable:
-			stack = stack.pushT(g.qptrID(x.TypeID, x.Address))
+			s = s.pushT(g.qptrID(x.TypeID, x.Address))
 		case
 			*ir.Arguments,
 			*ir.BeginScope,
 			*ir.EndScope,
+			*ir.Label,
 			*ir.Return,
 			*ir.VariableDeclaration:
 			// nop
 		default:
 			TODO("%s: %T", x.Pos(), x)
 		}
-		n.stacks = append(n.stacks, stack)
+		n.Stacks = append(n.Stacks, s)
+	}
+	s = n.Stacks[len(n.Stacks)-1]
+	g.computeStackStates(m, n.Fallthrough, s)
+	for _, v := range n.Out {
+		g.computeStackStates(m, v, s)
 	}
 	return n
 }
@@ -272,23 +418,32 @@ func (g *codeGraph) processExpressionList(ops []operation) (l exprList, _ int) {
 			args := l[s:]
 			l = l[:s:s]
 			l.op(x, args)
-			if len(g.tc.MustType(x.TypeID).(*ir.FunctionType).Results) == 0 {
-				return l, i + 1
-			}
 		case *ir.CallFP:
 			s := len(l) - x.Arguments - 1
 			args := l[s:]
 			l = l[:s:s]
 			l.op(x, args)
-			if len(g.tc.MustType(x.TypeID).(*ir.PointerType).Element.(*ir.FunctionType).Results) == 0 {
-				return l, i + 1
-			}
 		case
 			*ir.Convert,
-			*ir.Drop:
+			*ir.Drop,
+			*ir.Field,
+			*ir.Jnz,
+			*ir.Jz,
+			*ir.Load,
+			*ir.PostIncrement,
+			*ir.Switch:
 
 			l.unop(x)
-		case *ir.Store:
+		case
+			*ir.Add,
+			*ir.Element,
+			*ir.Geq,
+			*ir.Leq,
+			*ir.Lt,
+			*ir.Mul,
+			*ir.Store,
+			*ir.Sub:
+
 			l.binop(x)
 		case
 			*ir.Argument,
@@ -300,6 +455,8 @@ func (g *codeGraph) processExpressionList(ops []operation) (l exprList, _ int) {
 
 			l.operand(x)
 		case
+			*ir.EndScope, //TODO stack!
+			*ir.Jmp,
 			*ir.Return,
 			*ir.VariableDeclaration:
 			return l, i
@@ -312,18 +469,22 @@ func (g *codeGraph) processExpressionList(ops []operation) (l exprList, _ int) {
 			TODO("%s: %T", x.Pos(), x)
 		}
 	}
-	panic("TODO")
+	return l, len(ops)
 }
 
 func (g *codeGraph) processExpressions(m map[*codeNode]struct{}, n *codeNode) *codeNode {
+	if n == nil {
+		return nil
+	}
+
 	if _, ok := m[n]; ok {
 		return n
 	}
 
 	m[n] = struct{}{}
-	if len(n.in)+len(n.out) != 0 {
-		TODO("")
-	}
+	//TODO if len(n.Stacks[0]) > 1 {
+	//TODO 	TODO("%s", pretty(n.Ops))
+	//TODO }
 
 	var out []operation
 	for i := 0; i < len(n.Ops); {
@@ -344,7 +505,10 @@ func (g *codeGraph) processExpressions(m map[*codeNode]struct{}, n *codeNode) *c
 			*ir.AllocResult,
 			*ir.Arguments,
 			*ir.BeginScope,
+			*ir.Call,
 			*ir.EndScope,
+			*ir.Jmp,
+			*ir.Label,
 			*ir.Return,
 			*ir.VariableDeclaration:
 
@@ -355,10 +519,14 @@ func (g *codeGraph) processExpressions(m map[*codeNode]struct{}, n *codeNode) *c
 		}
 	}
 	n.Ops = out
+	g.processExpressions(m, n.Fallthrough)
+	for _, v := range n.Out {
+		g.processExpressions(m, v)
+	}
 	return n
 }
 
-func newCodeGraph(gen *gen, ops []ir.Operation) *codeNode {
+func newCodeGraph(gen *gen, ops []ir.Operation) (root *codeNode, labelsUsed map[int]struct{}) {
 	g := &codeGraph{
 		TypeCache: gen.tc,
 		gen:       gen,
@@ -368,15 +536,15 @@ func newCodeGraph(gen *gen, ops []ir.Operation) *codeNode {
 	for i := range a[1:] {
 		m, n := a[i], a[i+1]
 		out := make([]operation, n-m)
-		for i, v := range ops {
+		for i, v := range ops[m:n] {
 			out[i] = v
 		}
 		nodes = append(nodes, &codeNode{Ops: out})
 	}
-	root := g.addEdges(nodes)
+	root, labelsUsed = g.addEdges(nodes)
 	root = g.computeStackStates(map[*codeNode]struct{}{}, root, stack{})
 	root = g.processExpressions(map[*codeNode]struct{}{}, root)
-	return root
+	return root, labelsUsed
 }
 
 func varInfo(ops []ir.Operation) (decls []*ir.VariableDeclaration, scopes []int) {
@@ -397,3 +565,26 @@ func varInfo(ops []ir.Operation) (decls []*ir.VariableDeclaration, scopes []int)
 
 // if n%m != 0 { n += m-n%m }. m must be a power of 2.
 func roundup(n, m int) int { return (n + m - 1) &^ (m - 1) }
+
+type switchPair struct {
+	ir.Value
+	*ir.Label
+}
+
+type switchPairs []switchPair
+
+func (s switchPairs) Len() int { return len(s) }
+
+func (s switchPairs) Less(i, j int) bool {
+	switch x := s[i].Value.(type) {
+	case *ir.Int32Value:
+		return x.Value < s[j].Value.(*ir.Int32Value).Value
+	case *ir.Int64Value:
+		return x.Value < s[j].Value.(*ir.Int64Value).Value
+	default:
+		TODO("%T", x)
+	}
+	panic("internal error")
+}
+
+func (s switchPairs) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
