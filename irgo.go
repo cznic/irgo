@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"go/token"
 	"io"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -72,7 +73,7 @@ func newFn(tc ir.TypeCache, f *ir.FunctionDefinition) *fn {
 
 type gen struct {
 	builtins  map[int]string // Object#: qualifier.
-	drops     map[ir.TypeID]struct{}
+	copies    map[ir.TypeID]struct{}
 	f         *fn
 	mangled   map[cname]ir.NameID
 	obj       []ir.Object
@@ -88,7 +89,7 @@ type gen struct {
 func newGen(obj []ir.Object, qualifier func(*ir.FunctionDefinition) string) *gen {
 	return &gen{
 		builtins:  map[int]string{},
-		drops:     map[ir.TypeID]struct{}{},
+		copies:    map[ir.TypeID]struct{}{},
 		mangled:   map[cname]ir.NameID{},
 		obj:       obj,
 		out:       &buffer.Bytes{},
@@ -147,6 +148,8 @@ func (g *gen) typ0(buf *buffer.Bytes, t ir.Type) {
 	switch t.Kind() {
 	case ir.Int8:
 		buf.WriteString("int8 ")
+	case ir.Int16:
+		buf.WriteString("int16 ")
 	case ir.Uint16:
 		buf.WriteString("uint16 ")
 	case ir.Int32:
@@ -234,17 +237,34 @@ func (g *gen) string(n ir.StringID) int {
 	return x
 }
 
+func (g *gen) relop(n *exprNode) {
+	g.w("bool2int(")
+	g.expression(n.Childs[0])
+	switch x := n.Op.(type) {
+	case *ir.Eq:
+		g.w("==")
+	case *ir.Geq:
+		g.w(">=")
+	case *ir.Gt:
+		g.w(">")
+	case *ir.Leq:
+		g.w("<=")
+	case *ir.Lt:
+		g.w("<")
+	case *ir.Neq:
+		g.w("!=")
+	default:
+		TODO("%s: %T", n.Op.Pos(), x)
+	}
+	g.expression(n.Childs[1])
+	g.w(")")
+}
+
 func (g *gen) binop(n *exprNode) {
 	g.expression(n.Childs[0])
 	switch x := n.Op.(type) {
 	case *ir.Add:
 		g.w("+")
-	case *ir.Geq:
-		g.w(">=")
-	case *ir.Leq:
-		g.w("<=")
-	case *ir.Lt:
-		g.w("<")
 	case *ir.Mul:
 		g.w("*")
 	case *ir.Sub:
@@ -258,6 +278,7 @@ func (g *gen) binop(n *exprNode) {
 func (g *gen) expression(n *exprNode) {
 	switch n.Op.(type) {
 	case
+		*ir.Drop,
 		*ir.Jnz,
 		*ir.Jz,
 		*ir.Switch:
@@ -288,7 +309,21 @@ func (g *gen) expression(n *exprNode) {
 		}
 		g.w(")")
 	case *ir.Const32:
-		g.w("int32(%v) ", x.Value)
+		switch x.TypeID {
+		case idInt32:
+			g.w("int32(%v) ", x.Value)
+		default:
+			TODO("%s: %v", x.Pos(), x.TypeID)
+		}
+	case *ir.Const64:
+		switch x.TypeID {
+		case idFloat64:
+			g.w("float64(%v) ", math.Float64frombits(uint64(x.Value)))
+		case idUint64:
+			g.w("uint64(%v) ", uint64(x.Value))
+		default:
+			TODO("%s: %v", x.Pos(), x.TypeID)
+		}
 	case *ir.CallFP:
 		g.expression(n.Childs[0])
 		g.w("(")
@@ -306,9 +341,15 @@ func (g *gen) expression(n *exprNode) {
 		g.w("%v(", g.typ2(x.Result))
 		g.expression(n.Childs[0])
 		g.w(")")
+	case *ir.Copy:
+		g.copies[x.TypeID] = struct{}{}
+		g.w("copy_%d(", x.TypeID)
+		g.expression(n.Childs[0])
+		g.w(",")
+		g.expression(n.Childs[1])
+		g.w(")")
 	case *ir.Drop:
-		g.drops[x.TypeID] = struct{}{}
-		g.w("drop_%d(", x.TypeID)
+		g.w("drop(")
 		g.expression(n.Childs[0])
 		g.w(")")
 	case *ir.Element:
@@ -351,7 +392,7 @@ func (g *gen) expression(n *exprNode) {
 	case *ir.Jnz:
 		g.w("if")
 		g.expression(n.Childs[0])
-		g.w("{ goto ")
+		g.w("!= 0 { goto ")
 		switch {
 		case x.NameID != 0:
 			TODO("%s", x.Pos())
@@ -360,12 +401,12 @@ func (g *gen) expression(n *exprNode) {
 		}
 		g.w("}\n")
 	case *ir.Jz:
-		g.w("if !(")
+		g.w("if")
 		g.expression(n.Childs[0])
 		if len(n.Childs[0].Childs) == 0 {
 			g.w("!= 0")
 		}
-		g.w(") { goto ")
+		g.w("== 0 { goto ")
 		switch {
 		case x.NameID != 0:
 			TODO("%s", x.Pos())
@@ -377,14 +418,22 @@ func (g *gen) expression(n *exprNode) {
 		g.w("*")
 		g.expression(n.Childs[0])
 	case
-		*ir.Add,
-		//TODO		*ir.Geq,
+		*ir.Eq,
+		*ir.Geq,
+		*ir.Gt,
 		*ir.Leq,
 		*ir.Lt,
+		*ir.Neq:
+
+		g.relop(n)
+	case
+		*ir.Add,
 		*ir.Mul,
 		*ir.Sub:
 
 		g.binop(n)
+	case *ir.Nil:
+		g.w("nil")
 	case *ir.PostIncrement:
 		g.postIncs[x.TypeID] = struct{}{}
 		if x.Bits != 0 {
@@ -557,19 +606,18 @@ func (g *gen) functionDefinition(oi int, f *ir.FunctionDefinition) {
 	m := map[*codeNode]struct{}{}
 	var fn func(*codeNode)
 	fn = func(n *codeNode) {
+		if n == nil {
+			return
+		}
+
 		if _, ok := m[n]; ok {
 			return
 		}
 
-		more := map[*codeNode]struct{}{}
-		for ; n != nil; n = n.Fallthrough {
-			m[n] = struct{}{}
-			g.emit(n)
-			for _, v := range n.Out {
-				more[v] = struct{}{}
-			}
-		}
-		for v := range more {
+		m[n] = struct{}{}
+		g.emit(n)
+		fn(n.Fallthrough)
+		for _, v := range n.Out {
 			fn(v)
 		}
 	}
@@ -585,9 +633,11 @@ func (g *gen) value(v ir.Value) {
 			break
 		}
 
-		g.w(" (uintptr(unsafe.Pointer(&%v))+%v)", g.mangle(x.NameID, x.Linkage == ir.ExternalLinkage, -1), x.Offset)
+		g.w("(uintptr(unsafe.Pointer(&%v))+%v)", g.mangle(x.NameID, x.Linkage == ir.ExternalLinkage, -1), x.Offset)
+	case *ir.Float64Value:
+		g.w("%v", x.Value)
 	case *ir.Int32Value:
-		g.w(" %v ", x.Value)
+		g.w("%v", x.Value)
 	default:
 		TODO("%T", x)
 	}
@@ -641,9 +691,11 @@ func (g *gen) gen() error {
 		}
 		g.w("\")\n")
 	}
-	for _, v := range g.helpers(g.drops) {
-		g.w("func drop_%d(%v) {}\n", v.TypeID, g.typ2(v.TypeID))
+	g.w("func bool2int(b bool) int32 { if b { return 1}; return 0 }\n")
+	for _, v := range g.helpers(g.copies) {
+		g.w("func copy_%d(d, s *%[2]v) *%[2]v { *d = *s; return d }\n", v.TypeID, g.typ2(v.TypeID))
 	}
+	g.w("func drop(interface{}) {}\n")
 	for _, v := range g.helpers(g.postIncs) {
 		g.w("func postInc_%d(p *%[2]v, d %[2]v) %[2]v { v := *p; *p += d; return v }\n", v.TypeID, g.typ2(v.TypeID))
 	}
