@@ -15,8 +15,10 @@ import (
 )
 
 var (
-	idInt32 = ir.TypeID(dict.SID("main"))
-	idMain  = ir.NameID(dict.SID("main"))
+	idInt32   = ir.TypeID(dict.SID("main"))
+	idMain    = ir.NameID(dict.SID("main"))
+	idVoid    = ir.TypeID(dict.SID("struct{}"))
+	idVoidPtr = ir.TypeID(dict.SID("*struct{}"))
 
 	hooks = strutil.PrettyPrintHooks{
 		reflect.TypeOf(ir.NameID(0)): func(f strutil.Formatter, v interface{}, prefix string, suffix string) {
@@ -133,8 +135,6 @@ func splitPoints(ops []ir.Operation) sort.IntSlice {
 		case
 			//TODO 	*ir.JmpP,
 			*ir.Jmp,
-			*ir.Jz,
-			*ir.Jnz,
 			*ir.Return,
 			*ir.Switch:
 			a = append(a, i+1)
@@ -159,6 +159,8 @@ func splitPoints(ops []ir.Operation) sort.IntSlice {
 			*ir.Field,
 			*ir.Geq,
 			*ir.Global,
+			*ir.Jnz,
+			*ir.Jz,
 			*ir.Leq,
 			*ir.Load,
 			*ir.Lt,
@@ -280,13 +282,13 @@ func (g *codeGraph) addEdges(nodes []*codeNode) (root *codeNode, labelsUsed map[
 		if i+1 < len(nodes) {
 			switch x := op.(type) {
 			case
-				*ir.Drop,
-				*ir.EndScope,
-				*ir.Jnz,
-				*ir.Jz:
-				node.Fallthrough = nodes[i+1]
-			case
 				*ir.BeginScope,
+				*ir.Drop,
+				*ir.EndScope:
+
+				node.Fallthrough = nodes[i+1]
+				g.branch(node, nodes[i+1])
+			case
 				*ir.Jmp,
 				*ir.Return,
 				*ir.Switch:
@@ -343,7 +345,7 @@ func (g *codeGraph) computeStackStates(m map[*codeNode]struct{}, n *codeNode, s 
 			s = s.pop()
 		case *ir.Element:
 			t := g.tc.MustType(x.TypeID).(*ir.PointerType).Element
-			s = s.pop().pushT(t.ID())
+			s = s.pop().pop().pushT(t.ID())
 		case *ir.Field:
 			t := g.tc.MustType(x.TypeID).(*ir.PointerType).Element.(*ir.StructOrUnionType)
 			ft := t.Fields[x.Index]
@@ -377,10 +379,10 @@ func (g *codeGraph) computeStackStates(m map[*codeNode]struct{}, n *codeNode, s 
 
 			s = s.pop().pushT(x.TypeID)
 		case *ir.Result:
-			s = s.pushT(g.qptrID(x.TypeID, x.Address))
+			s = s.pushT(x.TypeID)
 		case *ir.Store:
 			v := s.tos()
-			s = s.pop().push(v)
+			s = s.pop().pop().push(v)
 		case *ir.StringConst:
 			s = s.pushT(x.TypeID)
 		case *ir.Sub:
@@ -388,7 +390,7 @@ func (g *codeGraph) computeStackStates(m map[*codeNode]struct{}, n *codeNode, s 
 		case *ir.Switch:
 			s = s.pop()
 		case *ir.Variable:
-			s = s.pushT(g.qptrID(x.TypeID, x.Address))
+			s = s.pushT(x.TypeID)
 		case
 			*ir.Arguments,
 			*ir.BeginScope,
@@ -401,6 +403,7 @@ func (g *codeGraph) computeStackStates(m map[*codeNode]struct{}, n *codeNode, s 
 			TODO("%s: %T", x.Pos(), x)
 		}
 		n.Stacks = append(n.Stacks, s)
+		//fmt.Printf("%s: %p %v %v\n", op.Pos(), n, op, s) //TODO-
 	}
 	s = n.Stacks[len(n.Stacks)-1]
 	g.computeStackStates(m, n.Fallthrough, s)
@@ -482,8 +485,14 @@ func (g *codeGraph) processExpressions(m map[*codeNode]struct{}, n *codeNode) *c
 	}
 
 	m[n] = struct{}{}
-	//TODO if len(n.Stacks[0]) > 1 {
-	//TODO 	TODO("%s", pretty(n.Ops))
+	//TODO for _, v := range n.In {
+	//TODO 	fmt.Printf("%p in %p\n", n, v) //TODO-
+	//TODO 	if s := v.Stacks; len(s) == 0 {
+	//TODO 		TODO("???: %s", pretty(v.Ops))
+	//TODO 	}
+	//TODO 	if s := v.Stacks[len(v.Stacks)-1]; len(s) != 0 {
+	//TODO 		TODO("%s:\n%s\n%s", n.Ops[0].Pos(), pretty(s), pretty(n.Ops))
+	//TODO 	}
 	//TODO }
 
 	var out []operation

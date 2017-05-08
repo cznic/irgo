@@ -147,16 +147,18 @@ func (g *gen) typ0(buf *buffer.Bytes, t ir.Type) {
 	switch t.Kind() {
 	case ir.Int8:
 		buf.WriteString("int8 ")
+	case ir.Uint16:
+		buf.WriteString("uint16 ")
 	case ir.Int32:
 		buf.WriteString("int32 ")
+	case ir.Int64:
+		buf.WriteString("int64 ")
 	case ir.Uint64:
 		buf.WriteString("uint64 ")
 	case ir.Float32:
 		buf.WriteString("float32 ")
 	case ir.Float64:
 		buf.WriteString("float64 ")
-	case ir.Pointer:
-		buf.WriteString("uintptr ")
 	case ir.Array:
 		at := t.(*ir.ArrayType)
 		fmt.Fprintf(buf, "[%v]", at.Items)
@@ -169,6 +171,14 @@ func (g *gen) typ0(buf *buffer.Bytes, t ir.Type) {
 			buf.WriteByte(';')
 		}
 		buf.WriteString("}")
+	case ir.Pointer:
+		if t.ID() == idVoidPtr {
+			buf.WriteString("uintptr ")
+			return
+		}
+
+		buf.WriteByte('*')
+		g.typ0(buf, t.(*ir.PointerType).Element)
 	default:
 		TODO("%v", t.Kind())
 	}
@@ -256,7 +266,6 @@ func (g *gen) expression(n *exprNode) {
 		g.w("(")
 		defer g.w(")")
 	}
-	//p := n.Parent
 	for _, v := range n.Childs {
 		v.Parent = n
 	}
@@ -294,7 +303,7 @@ func (g *gen) expression(n *exprNode) {
 			return
 		}
 
-		g.w("%v(", g.typ2(x.TypeID))
+		g.w("%v(", g.typ2(x.Result))
 		g.expression(n.Childs[0])
 		g.w(")")
 	case *ir.Drop:
@@ -369,7 +378,7 @@ func (g *gen) expression(n *exprNode) {
 		g.expression(n.Childs[0])
 	case
 		*ir.Add,
-		*ir.Geq,
+		//TODO		*ir.Geq,
 		*ir.Leq,
 		*ir.Lt,
 		*ir.Mul,
@@ -403,7 +412,7 @@ func (g *gen) expression(n *exprNode) {
 		g.expression(n.Childs[1])
 		g.w(")")
 	case *ir.StringConst:
-		g.w("uintptr(unsafe.Pointer(&strTab[%v]))", g.string(x.Value))
+		g.w("str(%v)", g.string(x.Value))
 	case *ir.Switch:
 		var a switchPairs
 		for i, v := range x.Values {
@@ -519,7 +528,7 @@ func (g *gen) functionDefinition(oi int, f *ir.FunctionDefinition) {
 	g.w("func %v(", g.mangle(f.NameID, f.Linkage == ir.ExternalLinkage, -1))
 	switch {
 	case f.NameID == idMain && len(ft.Arguments) != 2:
-		g.w("int32, uintptr) (r0 int32)")
+		g.w("int32, **int8) (r0 int32)")
 	default:
 		for i, v := range ft.Arguments {
 			if i < len(f.Arguments) {
@@ -565,10 +574,6 @@ func (g *gen) functionDefinition(oi int, f *ir.FunctionDefinition) {
 		}
 	}
 	fn(root)
-	if len(ft.Results) != 0 {
-		//TODO support multiple results.
-		g.w("return r0\n")
-	}
 	g.w("}\n\n")
 }
 
@@ -610,18 +615,6 @@ func (g *gen) helpers(m map[ir.TypeID]struct{}) (r []typeNfo) {
 }
 
 func (g *gen) gen() error {
-	g.w(`
-func store(p, v interface{}) interface{} {
-	switch x := v.(type) {
-	case int32:
-		*(p.(*int32)) = x
-	default:
-		panic("TODO539")
-	}
-	return v
-}
-
-`)
 	for i, v := range g.obj {
 		switch x := v.(type) {
 		case *ir.FunctionDefinition:
@@ -657,6 +650,7 @@ func store(p, v interface{}) interface{} {
 	for _, v := range g.helpers(g.stores) {
 		g.w("func store_%d(p *%[2]v, v %[2]v) %[2]v { *p = v; return v }\n", v.TypeID, g.typ2(v.TypeID))
 	}
+	g.w("func str(n int) uintptr { return uintptr(unsafe.Pointer(&strTab[n]))}\n")
 	return nil
 }
 
