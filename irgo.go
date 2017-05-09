@@ -433,9 +433,6 @@ func (g *gen) expression(n *exprNode) {
 	case *ir.Jz:
 		g.w("if")
 		g.expression(n.Childs[0])
-		if len(n.Childs[0].Childs) == 0 {
-			g.w("!= 0")
-		}
 		g.w("== 0 { goto ")
 		switch {
 		case x.NameID != 0:
@@ -550,7 +547,7 @@ func (g *gen) expression(n *exprNode) {
 			TODO("%T(%v)", x, x)
 		}
 	default:
-		TODO("%s: %T", x.Pos(), x)
+		TODO("%s: %T\n%s", x.Pos(), x, n.tree())
 	}
 }
 

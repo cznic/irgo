@@ -95,7 +95,14 @@ func (e *expr) Pos() token.Position { return e.Position }
 type exprNode struct {
 	Childs exprList
 	Op     operation
-	Parent *exprNode //TODO not used.
+	Parent *exprNode
+}
+
+func (e *exprNode) tree() string {
+	for e.Parent != nil {
+		e = e.Parent
+	}
+	return pretty(e)
 }
 
 type exprList []*exprNode
