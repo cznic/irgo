@@ -265,23 +265,53 @@ func (g *gen) binop(n *exprNode) {
 	switch x := n.Op.(type) {
 	case *ir.Add:
 		g.w("+")
+	case *ir.And:
+		g.w("&")
+	case *ir.Div:
+		g.w("/")
 	case *ir.Mul:
 		g.w("*")
+	case *ir.Or:
+		g.w("|")
 	case *ir.Sub:
 		g.w("-")
+	case *ir.Xor:
+		g.w("^")
 	default:
 		TODO("%s: %T", n.Op.Pos(), x)
 	}
 	g.expression(n.Childs[1])
 }
 
+func (g *gen) bool(n *exprNode) {
+	g.w("(")
+	g.expression(n)
+	g.w("!= 0)")
+}
+
+func (g *gen) logop(n *exprNode) {
+	g.w("bool2int(")
+	g.bool(n.Childs[0])
+	switch n.Op {
+	case land:
+		g.w("&&")
+	case lor:
+		g.w("||")
+	default:
+		TODO("%v", n.Op)
+	}
+	g.bool(n.Childs[1])
+	g.w(")")
+}
+
 func (g *gen) expression(n *exprNode) {
 	switch n.Op.(type) {
 	case
-		*ir.Drop,
 		*ir.Jnz,
 		*ir.Jz,
+		*ir.Drop,
 		*ir.Switch:
+
 		// nop
 	default:
 		g.w("(")
@@ -428,8 +458,12 @@ func (g *gen) expression(n *exprNode) {
 		g.relop(n)
 	case
 		*ir.Add,
+		*ir.And,
+		*ir.Div,
 		*ir.Mul,
-		*ir.Sub:
+		*ir.Or,
+		*ir.Sub,
+		*ir.Xor:
 
 		g.binop(n)
 	case *ir.Nil:
@@ -500,6 +534,21 @@ func (g *gen) expression(n *exprNode) {
 			sc = -1
 		}
 		g.w("(%v)", g.mangle(g.f.varDecls[x.Index].NameID, false, sc))
+	case xop:
+		switch x {
+		case
+			landOp,
+			lorOp:
+
+			g.expression(n.Childs[1])
+		case
+			land,
+			lor:
+
+			g.logop(n)
+		default:
+			TODO("%T(%v)", x, x)
+		}
 	default:
 		TODO("%s: %T", x.Pos(), x)
 	}
@@ -535,11 +584,7 @@ func (g *gen) emit(n *codeNode) {
 				g.w("_%v\n", x.Number)
 			}
 		case *ir.Label:
-			n := int(x.NameID)
-			if n == 0 {
-				n = -x.Number
-			}
-			if _, ok := g.f.labelsUsed[n]; !ok {
+			if _, ok := g.f.labelsUsed[label(x)]; !ok {
 				break
 			}
 
@@ -567,6 +612,9 @@ func (g *gen) functionDefinition(oi int, f *ir.FunctionDefinition) {
 	}
 
 	//fmt.Printf("====\n%s\n", pretty(f.Body)) //TODO-
+	//for i, v := range f.Body {
+	//	fmt.Printf("%#05x %v\n", i, v)
+	//}
 	g.f = newFn(g.tc, f)
 	ft := g.f.t
 
@@ -690,6 +738,7 @@ func (g *gen) gen() error {
 			}
 		}
 		g.w("\")\n")
+		g.w("func str(n int) uintptr { return uintptr(unsafe.Pointer(&strTab[n]))}\n")
 	}
 	g.w("func bool2int(b bool) int32 { if b { return 1}; return 0 }\n")
 	for _, v := range g.helpers(g.copies) {
@@ -702,7 +751,6 @@ func (g *gen) gen() error {
 	for _, v := range g.helpers(g.stores) {
 		g.w("func store_%d(p *%[2]v, v %[2]v) %[2]v { *p = v; return v }\n", v.TypeID, g.typ2(v.TypeID))
 	}
-	g.w("func str(n int) uintptr { return uintptr(unsafe.Pointer(&strTab[n]))}\n")
 	return nil
 }
 
