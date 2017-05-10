@@ -17,10 +17,9 @@ import (
 
 const (
 	_ xop = iota
-	lorOp
-	lor
-	landOp
 	land
+	lop
+	lor
 )
 
 var (
@@ -96,6 +95,7 @@ type exprNode struct {
 	Childs exprList
 	Op     operation
 	Parent *exprNode
+	ir.TypeID
 }
 
 func (e *exprNode) tree() string {
@@ -107,16 +107,19 @@ func (e *exprNode) tree() string {
 
 type exprList []*exprNode
 
-func (p *exprList) op(op operation, childs exprList) { p.push(&exprNode{Op: op, Childs: childs}) }
-func (p *exprList) operand(op operation)             { p.push(&exprNode{Op: op}) }
-func (p *exprList) push(e *exprNode)                 { *p = append(*p, e) }
-func (p *exprList) unop(op operation)                { p.op(op, exprList{p.pop()}) }
-func (p exprList) String() string                    { return pretty(p) }
+func (p *exprList) operand(op operation, t ir.TypeID) { p.push(&exprNode{Op: op, TypeID: t}) }
+func (p *exprList) push(e *exprNode)                  { *p = append(*p, e) }
+func (p *exprList) unop(op operation, t ir.TypeID)    { p.op(op, t, exprList{p.pop()}) }
+func (p exprList) String() string                     { return pretty(p) }
 
-func (p *exprList) binop(op operation) {
+func (p *exprList) op(op operation, t ir.TypeID, childs exprList) {
+	p.push(&exprNode{Op: op, TypeID: t, Childs: childs})
+}
+
+func (p *exprList) binop(op operation, t ir.TypeID) {
 	b := p.pop()
 	a := p.pop()
-	p.op(op, exprList{a, b})
+	p.op(op, t, exprList{a, b})
 }
 
 func (p *exprList) pop() *exprNode {
@@ -130,7 +133,7 @@ type codeNode struct {
 	Fallthrough *codeNode
 	In, Out     []*codeNode
 	Ops         []operation
-	Stacks      []stack //TODO not used.
+	Stacks      []stack
 	inm, outm   map[*codeNode]struct{}
 }
 
@@ -194,6 +197,7 @@ func splitPoints(ops []ir.Operation) sort.IntSlice {
 			*ir.Copy,
 			*ir.Div,
 			*ir.Drop,
+			*ir.Dup,
 			*ir.Element,
 			*ir.EndScope,
 			*ir.Eq,
@@ -222,8 +226,6 @@ func splitPoints(ops []ir.Operation) sort.IntSlice {
 			*ir.VariableDeclaration,
 			*ir.Xor:
 			// nop
-		case *ir.Dup:
-			TODO("%s: TODO %T", x.Pos(), x)
 		default:
 			TODO("%s: %T", x.Pos(), x)
 		}
@@ -315,6 +317,7 @@ func (g *codeGraph) addEdges(nodes []*codeNode) (root *codeNode, labelsUsed map[
 				*ir.Copy,
 				*ir.Div,
 				*ir.Drop,
+				*ir.Dup,
 				*ir.Element,
 				*ir.EndScope,
 				*ir.Eq,
@@ -328,11 +331,12 @@ func (g *codeGraph) addEdges(nodes []*codeNode) (root *codeNode, labelsUsed map[
 				*ir.Lt,
 				*ir.Mul,
 				*ir.Neq,
-				*ir.Not,
 				*ir.Nil,
+				*ir.Not,
 				*ir.Or,
 				*ir.PostIncrement,
 				*ir.PreIncrement,
+				*ir.Rem,
 				*ir.Result,
 				*ir.Return,
 				*ir.Store,
@@ -421,6 +425,21 @@ Non empty evaluation stack at IR code node boundary.
 		0: eval expr2			[expr2]
 		1:				[exprList/expr2]
 
+expr op= expr.
+
+	// a += 56.78;
+	variable        	&#0, *float32	; ../cc/testdata/tcc-0.9.26/tests/tests2/22_floating_point.c:23:4
+	dup             	*float32	; ../cc/testdata/tcc-0.9.26/tests/tests2/22_floating_point.c:23:4
+	load            	*float32	; ../cc/testdata/tcc-0.9.26/tests/tests2/22_floating_point.c:23:4
+	convert         	float32, float64	; ../cc/testdata/tcc-0.9.26/tests/tests2/22_floating_point.c:23:4
+	const           	0x404c63d70a3d70a4, float64	; ../cc/testdata/tcc-0.9.26/tests/tests2/22_floating_point.c:23:9
+	add             	float64	; ../cc/testdata/tcc-0.9.26/tests/tests2/22_floating_point.c:23:4
+	convert         	float64, float32	; ../cc/testdata/tcc-0.9.26/tests/tests2/22_floating_point.c:23:4
+	store           	float32	; ../cc/testdata/tcc-0.9.26/tests/tests2/22_floating_point.c:23:4
+	drop            	float32	; ../cc/testdata/tcc-0.9.26/tests/tests2/22_floating_point.c:23:4
+
+	drop(store(func()(*float32, float32){ p := dup(var); return p, *p+56.78 }))
+
 */
 
 func (g *codeGraph) computeStackStates(m map[*codeNode]struct{}, n *codeNode, s stack) *codeNode {
@@ -434,7 +453,7 @@ func (g *codeGraph) computeStackStates(m map[*codeNode]struct{}, n *codeNode, s 
 
 	m[n] = struct{}{}
 	if len(s) != 0 {
-		TODO("%s: TODO stack: %v\n\t%s", n.Ops[0].Pos(), n.Ops[0], s)
+		TODO("%s: TODO stack(%v): %v\n\t%s", n.Ops[0].Pos(), len(s), n.Ops[0], s)
 	}
 	for i := 0; i < len(n.Ops); i++ {
 		op := n.Ops[i]
@@ -447,6 +466,8 @@ func (g *codeGraph) computeStackStates(m map[*codeNode]struct{}, n *codeNode, s 
 			s = s.pushT(x.TypeID)
 		case *ir.Argument:
 			s = s.pushT(g.qptrID(x.TypeID, x.Address))
+		case *ir.Bool:
+			s = s.pop().pushT(idInt32)
 		case *ir.Call:
 			for i := 0; i < x.Arguments; i++ {
 				s = s.pop()
@@ -467,6 +488,8 @@ func (g *codeGraph) computeStackStates(m map[*codeNode]struct{}, n *codeNode, s 
 			s = s.pop().pop().pushT(x.TypeID)
 		case *ir.Drop:
 			s = s.pop()
+		case *ir.Dup:
+			s = s.push(s.tos())
 		case *ir.Element:
 			t := g.tc.MustType(x.TypeID).(*ir.PointerType).Element
 			s = s.pop().pop().pushT(t.ID())
@@ -491,7 +514,7 @@ func (g *codeGraph) computeStackStates(m map[*codeNode]struct{}, n *codeNode, s 
 			case 0:
 				if len(s) != 0 {
 					s = s.pop()
-					n.Ops[i] = lorOp
+					n.Ops[i] = lop
 					g.lor[nn]++
 				}
 			case 1:
@@ -521,7 +544,7 @@ func (g *codeGraph) computeStackStates(m map[*codeNode]struct{}, n *codeNode, s 
 			case 0:
 				if len(s) != 0 {
 					s = s.pop()
-					n.Ops[i] = landOp
+					n.Ops[i] = lop
 					g.land[nn]++
 				}
 			case 1:
@@ -566,6 +589,13 @@ func (g *codeGraph) computeStackStates(m map[*codeNode]struct{}, n *codeNode, s 
 			}
 
 			s = s.pop().pushT(x.TypeID)
+		case *ir.PreIncrement:
+			if x.Bits != 0 {
+				TODO("%s", x.Pos())
+				break
+			}
+
+			s = s.pop().pushT(x.TypeID)
 		case *ir.Result:
 			s = s.pushT(x.TypeID)
 		case *ir.Store:
@@ -603,20 +633,30 @@ func (g *codeGraph) computeStackStates(m map[*codeNode]struct{}, n *codeNode, s 
 	return n
 }
 
-func (g *codeGraph) processExpressionList(ops []operation) (l exprList, _ int) {
+func (g *codeGraph) processExpressionList(ops []operation, stacks []stack) (l exprList, _ int) {
 	for i, op := range ops {
+		var t ir.TypeID
+		if s := stacks[i]; len(s) != 0 {
+			t = s.tos().TypeID
+		}
 		switch x := op.(type) {
 		case *ir.Call:
 			s := len(l) - x.Arguments
 			args := l[s:]
 			l = l[:s:s]
-			l.op(x, args)
+			l.op(x, t, args)
 		case *ir.CallFP:
 			s := len(l) - x.Arguments - 1
 			args := l[s:]
 			l = l[:s:s]
-			l.op(x, args)
+			l.op(x, t, args)
+		case *ir.Dup:
+			l.unop(x, t)
+			tos := l.pop()
+			l.push(tos)
+			l.push(tos)
 		case
+			*ir.Bool,
 			*ir.Convert,
 			*ir.Drop,
 			*ir.Field,
@@ -624,9 +664,10 @@ func (g *codeGraph) processExpressionList(ops []operation) (l exprList, _ int) {
 			*ir.Jz,
 			*ir.Load,
 			*ir.PostIncrement,
+			*ir.PreIncrement,
 			*ir.Switch:
 
-			l.unop(x)
+			l.unop(x, t)
 		case
 			*ir.Add,
 			*ir.And,
@@ -645,7 +686,7 @@ func (g *codeGraph) processExpressionList(ops []operation) (l exprList, _ int) {
 			*ir.Sub,
 			*ir.Xor:
 
-			l.binop(x)
+			l.binop(x, t)
 		case
 			*ir.Argument,
 			*ir.Const32,
@@ -656,7 +697,7 @@ func (g *codeGraph) processExpressionList(ops []operation) (l exprList, _ int) {
 			*ir.StringConst,
 			*ir.Variable:
 
-			l.operand(x)
+			l.operand(x, t)
 		case
 			*ir.EndScope,
 			*ir.Jmp,
@@ -672,11 +713,10 @@ func (g *codeGraph) processExpressionList(ops []operation) (l exprList, _ int) {
 			switch x {
 			case
 				land,
-				landOp,
-				lor,
-				lorOp:
+				lop,
+				lor:
 
-				l.binop(x)
+				l.binop(x, t)
 			default:
 				TODO("%v", x)
 			}
@@ -708,7 +748,7 @@ func (g *codeGraph) processExpressions(m map[*codeNode]struct{}, n *codeNode) *c
 			*ir.StringConst,
 			*ir.Variable:
 			// Start of an expression or expression list.
-			l, nodes := g.processExpressionList(n.Ops[i:])
+			l, nodes := g.processExpressionList(n.Ops[i:], n.Stacks[i:])
 			for _, v := range l {
 				out = append(out, newExpr(v, x.Pos()))
 			}

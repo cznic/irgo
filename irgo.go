@@ -79,6 +79,7 @@ type gen struct {
 	obj       []ir.Object
 	out       *buffer.Bytes
 	postIncs  map[ir.TypeID]struct{}
+	preIncs   map[ir.TypeID]struct{}
 	qualifier func(*ir.FunctionDefinition) string
 	stores    map[ir.TypeID]struct{}
 	strTab    map[ir.StringID]int
@@ -94,6 +95,7 @@ func newGen(obj []ir.Object, qualifier func(*ir.FunctionDefinition) string) *gen
 		obj:       obj,
 		out:       &buffer.Bytes{},
 		postIncs:  map[ir.TypeID]struct{}{},
+		preIncs:   map[ir.TypeID]struct{}{},
 		qualifier: qualifier,
 		stores:    map[ir.TypeID]struct{}{},
 		strTab:    map[ir.StringID]int{},
@@ -327,14 +329,47 @@ func (g *gen) expression(n *exprNode) {
 		}
 
 		g.w("(%s)", g.mangle(g.f.f.Arguments[x.Index], false, -1))
+	case *ir.Bool:
+		g.expression(n.Childs[0])
+		switch {
+		case g.tc.MustType(x.TypeID).Kind() == ir.Pointer:
+			g.w("!= nil")
+		default:
+			g.w("!= 0")
+		}
 	case *ir.Call:
 		f := g.obj[x.Index].(*ir.FunctionDefinition)
 		if q, ok := g.isBuiltin(x.Index); ok {
 			g.w("%s.", q)
 		}
 		g.w("%s(", g.mangle(f.NameID, f.Linkage == ir.ExternalLinkage, -1))
-		for _, v := range n.Childs {
-			g.expression(v)
+		ft := g.tc.MustType(f.TypeID).(*ir.FunctionType)
+		for i, v := range n.Childs {
+			switch {
+			case ft.Variadic && i >= len(ft.Arguments) && g.tc.MustType(v.TypeID).Kind() == ir.Pointer:
+				g.w("unsafe.Pointer(")
+				g.expression(v)
+				g.w(")")
+			default:
+				g.expression(v)
+			}
+			g.w(", ")
+		}
+		g.w(")")
+	case *ir.CallFP:
+		fp := n.Childs[0]
+		g.expression(fp)
+		ft := g.tc.MustType(fp.TypeID).(*ir.PointerType).Element.(*ir.FunctionType)
+		g.w("(")
+		for i, v := range n.Childs[1:] {
+			switch {
+			case ft.Variadic && i >= len(ft.Arguments) && g.tc.MustType(v.TypeID).Kind() == ir.Pointer:
+				g.w("unsafe.Pointer(")
+				g.expression(v)
+				g.w(")")
+			default:
+				g.expression(v)
+			}
 			g.w(", ")
 		}
 		g.w(")")
@@ -354,14 +389,6 @@ func (g *gen) expression(n *exprNode) {
 		default:
 			TODO("%s: %v", x.Pos(), x.TypeID)
 		}
-	case *ir.CallFP:
-		g.expression(n.Childs[0])
-		g.w("(")
-		for _, v := range n.Childs[1:] {
-			g.expression(v)
-			g.w(", ")
-		}
-		g.w(")")
 	case *ir.Convert:
 		if x, ok := n.Childs[0].Op.(*ir.Global); ok && x.NameID == idMain {
 			g.expression(n.Childs[0])
@@ -443,6 +470,11 @@ func (g *gen) expression(n *exprNode) {
 		g.w("}\n")
 	case *ir.Load:
 		g.w("*")
+		if _, ok := n.Childs[0].Op.(*ir.Dup); ok {
+			g.w("p")
+			break
+		}
+
 		g.expression(n.Childs[0])
 	case
 		*ir.Eq,
@@ -473,7 +505,26 @@ func (g *gen) expression(n *exprNode) {
 
 		g.w("postInc_%d(", x.TypeID)
 		g.expression(n.Childs[0])
-		g.w(", %v(%v))", g.typ2(x.TypeID), x.Delta)
+		switch {
+		case g.tc.MustType(x.TypeID).Kind() == ir.Pointer:
+			g.w(", %v)", x.Delta)
+		default:
+			g.w(", %v(%v))", g.typ2(x.TypeID), x.Delta)
+		}
+	case *ir.PreIncrement:
+		g.preIncs[x.TypeID] = struct{}{}
+		if x.Bits != 0 {
+			TODO("%s", x.Pos())
+		}
+
+		g.w("preInc_%d(", x.TypeID)
+		g.expression(n.Childs[0])
+		switch {
+		case g.tc.MustType(x.TypeID).Kind() == ir.Pointer:
+			g.w(", %v)", x.Delta)
+		default:
+			g.w(", %v(%v))", g.typ2(x.TypeID), x.Delta)
+		}
 	case *ir.Result:
 		if x.Address {
 			g.w("&")
@@ -481,12 +532,23 @@ func (g *gen) expression(n *exprNode) {
 
 		g.w("(r%v)", x.Index)
 	case *ir.Store:
-		g.stores[x.TypeID] = struct{}{}
 		if x.Bits != 0 {
 			TODO("%s", x.Pos())
 		}
 
+		g.stores[x.TypeID] = struct{}{}
 		g.w("store_%d(", x.TypeID)
+		if _, ok := n.Childs[0].Op.(*ir.Dup); ok {
+			t := g.typ2(x.TypeID)
+			g.w("func()(*%[1]v, %[1]v){ p := ", t)
+			g.expression(n.Childs[0].Childs[0])
+			g.w("; return p,")
+			g.expression(n.Childs[1])
+			g.w("}()")
+			g.w(")")
+			break
+		}
+
 		g.expression(n.Childs[0])
 		g.w(", ")
 		g.expression(n.Childs[1])
@@ -522,26 +584,21 @@ func (g *gen) expression(n *exprNode) {
 		}
 		g.w("}")
 	case *ir.Variable:
-		if x.Address {
-			g.w("&")
-		}
-
 		sc := g.f.varDeclScopes[x.Index]
 		if sc == 0 {
 			sc = -1
 		}
-		g.w("(%v)", g.mangle(g.f.varDecls[x.Index].NameID, false, sc))
+		if x.Address {
+			g.w("&(%v)", g.mangle(g.f.varDecls[x.Index].NameID, false, sc))
+			break
+		}
+
+		g.w("%v", g.mangle(g.f.varDecls[x.Index].NameID, false, sc))
 	case xop:
 		switch x {
-		case
-			landOp,
-			lorOp:
-
+		case lop:
 			g.expression(n.Childs[1])
-		case
-			land,
-			lor:
-
+		case land, lor:
 			g.logop(n)
 		default:
 			TODO("%T(%v)", x, x)
@@ -608,10 +665,10 @@ func (g *gen) functionDefinition(oi int, f *ir.FunctionDefinition) {
 		return
 	}
 
-	//fmt.Printf("====\n%s\n", pretty(f.Body)) //TODO-
-	//for i, v := range f.Body {
-	//	fmt.Printf("%#05x %v\n", i, v)
-	//}
+	// fmt.Printf("====\n%s\n", pretty(f.Body)) //TODO-
+	// for i, v := range f.Body { //TODO-
+	// 	fmt.Printf("%#05x %v\n", i, v) //TODO-
+	// } //TODO-
 	g.f = newFn(g.tc, f)
 	ft := g.f.t
 
@@ -735,7 +792,7 @@ func (g *gen) gen() error {
 			}
 		}
 		g.w("\")\n")
-		g.w("func str(n int) uintptr { return uintptr(unsafe.Pointer(&strTab[n]))}\n")
+		g.w("func str(n int) *int8 { return (*int8)(unsafe.Pointer(&strTab[n]))}\n")
 	}
 	g.w("func bool2int(b bool) int32 { if b { return 1}; return 0 }\n")
 	for _, v := range g.helpers(g.copies) {
@@ -743,7 +800,12 @@ func (g *gen) gen() error {
 	}
 	g.w("func drop(interface{}) {}\n")
 	for _, v := range g.helpers(g.postIncs) {
-		g.w("func postInc_%d(p *%[2]v, d %[2]v) %[2]v { v := *p; *p += d; return v }\n", v.TypeID, g.typ2(v.TypeID))
+		switch {
+		case g.tc.MustType(v.TypeID).Kind() == ir.Pointer:
+			g.w("func postInc_%d(p *%[2]v, d int) %[2]v { q := (*uintptr)(unsafe.Pointer(p)); v := *q; *q += uintptr(d); return (%[2]v)(unsafe.Pointer(v)) }\n", v.TypeID, g.typ2(v.TypeID))
+		default:
+			g.w("func postInc_%d(p *%[2]v, d %[2]v) %[2]v { v := *p; *p += d; return v }\n", v.TypeID, g.typ2(v.TypeID))
+		}
 	}
 	for _, v := range g.helpers(g.stores) {
 		g.w("func store_%d(p *%[2]v, v %[2]v) %[2]v { *p = v; return v }\n", v.TypeID, g.typ2(v.TypeID))
