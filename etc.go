@@ -492,7 +492,7 @@ func (g *codeGraph) computeStackStates(m map[*codeNode]struct{}, n *codeNode, s 
 			s = s.push(s.tos())
 		case *ir.Element:
 			t := g.tc.MustType(x.TypeID).(*ir.PointerType).Element
-			s = s.pop().pop().pushT(t.ID())
+			s = s.pop().pop().pushT(g.qptrID(t.ID(), x.Address))
 		case *ir.Field:
 			t := g.tc.MustType(x.TypeID).(*ir.PointerType).Element.(*ir.StructOrUnionType)
 			ft := t.Fields[x.Index]
@@ -779,7 +779,7 @@ func (g *codeGraph) processExpressions(m map[*codeNode]struct{}, n *codeNode) *c
 	return n
 }
 
-func varInfo(ops []ir.Operation) (decls []*ir.VariableDeclaration, scopes []int) {
+func varInfo(ops []ir.Operation) (nfo []varNfo) {
 	n := -1
 	for _, op := range ops {
 		switch x := op.(type) {
@@ -788,14 +788,13 @@ func varInfo(ops []ir.Operation) (decls []*ir.VariableDeclaration, scopes []int)
 		case *ir.EndScope:
 			n--
 		case *ir.VariableDeclaration:
-			decls = append(decls, x)
-			scopes = append(scopes, n)
+			nfo = append(nfo, varNfo{x, n})
 		}
 	}
 	if n != -1 {
 		panic("internal error")
 	}
-	return decls, scopes
+	return nfo
 }
 
 // if n%m != 0 { n += m-n%m }. m must be a power of 2.

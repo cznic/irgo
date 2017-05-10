@@ -42,6 +42,11 @@ func TODO(msg string, more ...interface{}) string { //TODOOK
 	panic(fmt.Errorf("%s:%d: TODO %v", path.Base(fn), fl, fmt.Sprintf(msg, more...)))
 }
 
+type varNfo struct {
+	def   *ir.VariableDeclaration
+	scope int
+}
+
 type typeNfo struct {
 	ir.TypeID
 	string
@@ -53,21 +58,18 @@ type cname struct {
 }
 
 type fn struct {
-	f             *ir.FunctionDefinition
-	labelsUsed    map[int]struct{}
-	t             *ir.FunctionType
-	varDeclScopes []int
-	varDecls      []*ir.VariableDeclaration
+	f          *ir.FunctionDefinition
+	labelsUsed map[int]struct{}
+	t          *ir.FunctionType
+	varNfo     []varNfo
 }
 
 func newFn(tc ir.TypeCache, f *ir.FunctionDefinition) *fn {
 	t := tc.MustType(f.TypeID).(*ir.FunctionType)
-	varDecls, varDeclScopes := varInfo(f.Body)
 	return &fn{
-		f:             f,
-		t:             t,
-		varDeclScopes: varDeclScopes,
-		varDecls:      varDecls,
+		f:      f,
+		t:      t,
+		varNfo: varInfo(f.Body),
 	}
 }
 
@@ -319,6 +321,7 @@ func (g *gen) expression(n *exprNode) {
 		g.w("(")
 		defer g.w(")")
 	}
+	p := n.Parent
 	for _, v := range n.Childs {
 		v.Parent = n
 	}
@@ -396,7 +399,14 @@ func (g *gen) expression(n *exprNode) {
 		}
 
 		g.w("%v(", g.typ2(x.Result))
-		g.expression(n.Childs[0])
+		switch {
+		case g.tc.MustType(x.Result).Kind() == ir.Pointer:
+			g.w("unsafe.Pointer(")
+			g.expression(n.Childs[0])
+			g.w(")")
+		default:
+			g.expression(n.Childs[0])
+		}
 		g.w(")")
 	case *ir.Copy:
 		g.copies[x.TypeID] = struct{}{}
@@ -430,6 +440,15 @@ func (g *gen) expression(n *exprNode) {
 		g.w(".X%v)", x.Index)
 	case *ir.Global:
 		nm := g.mangle(x.NameID, x.Linkage == ir.ExternalLinkage, -1)
+		if p != nil {
+			switch p.Op.(type) {
+			case *ir.Call, *ir.CallFP:
+				if g.tc.MustType(g.obj[x.Index].Base().TypeID).Kind() == ir.Array {
+					g.w("&(%v[0])", nm)
+					return
+				}
+			}
+		}
 		if x.Address {
 			switch t := g.tc.MustType(x.TypeID); t.Kind() {
 			case ir.Pointer:
@@ -472,7 +491,7 @@ func (g *gen) expression(n *exprNode) {
 		g.w("*")
 		if _, ok := n.Childs[0].Op.(*ir.Dup); ok {
 			g.w("p")
-			break
+			return
 		}
 
 		g.expression(n.Childs[0])
@@ -546,7 +565,7 @@ func (g *gen) expression(n *exprNode) {
 			g.expression(n.Childs[1])
 			g.w("}()")
 			g.w(")")
-			break
+			return
 		}
 
 		g.expression(n.Childs[0])
@@ -584,16 +603,24 @@ func (g *gen) expression(n *exprNode) {
 		}
 		g.w("}")
 	case *ir.Variable:
-		sc := g.f.varDeclScopes[x.Index]
+		nfo := g.f.varNfo[x.Index]
+		sc := nfo.scope
 		if sc == 0 {
 			sc = -1
 		}
-		if x.Address {
-			g.w("&(%v)", g.mangle(g.f.varDecls[x.Index].NameID, false, sc))
-			break
+		if p != nil {
+			switch p.Op.(type) {
+			case *ir.Call, *ir.CallFP:
+				if g.tc.MustType(nfo.def.TypeID).Kind() == ir.Array {
+					g.w("&(%v[0])", g.mangle(nfo.def.NameID, false, sc))
+					return
+				}
+			}
 		}
-
-		g.w("%v", g.mangle(g.f.varDecls[x.Index].NameID, false, sc))
+		if x.Address {
+			g.w("&")
+		}
+		g.w("%v", g.mangle(nfo.def.NameID, false, sc))
 	case xop:
 		switch x {
 		case lop:
@@ -621,7 +648,8 @@ func (g *gen) emit(n *codeNode) {
 				break
 			}
 
-			sc := g.f.varDeclScopes[x.Index]
+			nfo := g.f.varNfo[x.Index]
+			sc := nfo.scope
 			if sc == 0 {
 				sc = -1
 			}
@@ -694,13 +722,13 @@ func (g *gen) functionDefinition(oi int, f *ir.FunctionDefinition) {
 		}
 	}
 	g.w("{ // %v\n", g.pos(f.Position))
-	for i, v := range g.f.varDecls {
-		sc := g.f.varDeclScopes[i]
+	for _, v := range g.f.varNfo {
+		sc := v.scope
 		if sc == 0 {
 			sc = -1
 		}
-		nm := g.mangle(v.NameID, false, sc)
-		g.w("var %v %v\n", nm, g.typ2(v.TypeID))
+		nm := g.mangle(v.def.NameID, false, sc)
+		g.w("var %v %v\n", nm, g.typ2(v.def.TypeID))
 		g.w("_ = %v\n", nm)
 	}
 	var root *codeNode
