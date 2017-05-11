@@ -277,6 +277,8 @@ func (g *gen) binop(n *exprNode) {
 		g.w("*")
 	case *ir.Or:
 		g.w("|")
+	case *ir.Rem:
+		g.w("%%")
 	case *ir.Sub:
 		g.w("-")
 	case *ir.Xor:
@@ -328,11 +330,12 @@ func (g *gen) expression(n *exprNode) {
 	switch x := n.Op.(type) {
 	case *ir.Argument:
 		if x.Address {
-			TODO("%s", x.Pos())
+			g.w("&")
 		}
 
 		g.w("(%s)", g.mangle(g.f.f.Arguments[x.Index], false, -1))
 	case *ir.Bool:
+		g.w("bool2int(")
 		g.expression(n.Childs[0])
 		switch {
 		case g.tc.MustType(x.TypeID).Kind() == ir.Pointer:
@@ -340,6 +343,7 @@ func (g *gen) expression(n *exprNode) {
 		default:
 			g.w("!= 0")
 		}
+		g.w(")")
 	case *ir.Call:
 		f := g.obj[x.Index].(*ir.FunctionDefinition)
 		if q, ok := g.isBuiltin(x.Index); ok {
@@ -387,6 +391,8 @@ func (g *gen) expression(n *exprNode) {
 		switch x.TypeID {
 		case idFloat64:
 			g.w("float64(%v) ", math.Float64frombits(uint64(x.Value)))
+		case idInt64:
+			g.w("int64(%v) ", x.Value)
 		case idUint64:
 			g.w("uint64(%v) ", uint64(x.Value))
 		default:
@@ -519,6 +525,7 @@ func (g *gen) expression(n *exprNode) {
 		*ir.Div,
 		*ir.Mul,
 		*ir.Or,
+		*ir.Rem,
 		*ir.Sub,
 		*ir.Xor:
 
@@ -640,6 +647,14 @@ func (g *gen) expression(n *exprNode) {
 			g.expression(n.Childs[1])
 		case land, lor:
 			g.logop(n)
+		case ternary:
+			g.w("func() %v { if ", n.TypeID)
+			g.expression(n.Childs[0])
+			g.w("!= 0 { return")
+			g.expression(n.Childs[1])
+			g.w("}; return")
+			g.expression(n.Childs[2])
+			g.w("}()")
 		default:
 			TODO("%T(%v)", x, x)
 		}
