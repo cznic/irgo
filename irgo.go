@@ -423,10 +423,19 @@ func (g *gen) expression(n *exprNode) {
 		if x.Address {
 			g.w("&")
 		}
-
 		g.w("(")
-		g.expression(n.Childs[0])
+		switch t := g.tc.MustType(n.Childs[0].TypeID).(*ir.PointerType).Element; t.Kind() {
+		case ir.Array:
+			g.expression(n.Childs[0])
+		default:
+			g.w("(*[%v]%v)(unsafe.Pointer(", math.MaxInt32, t)
+			g.expression(n.Childs[0])
+			g.w("))")
+		}
 		g.w("[")
+		if x.Neg {
+			g.w("-")
+		}
 		g.expression(n.Childs[1])
 		g.w("]")
 		g.w(")")
@@ -516,6 +525,10 @@ func (g *gen) expression(n *exprNode) {
 		g.binop(n)
 	case *ir.Nil:
 		g.w("nil")
+	case *ir.Not:
+		g.w("not(")
+		g.expression(n.Childs[0])
+		g.w(")")
 	case *ir.PostIncrement:
 		g.postIncs[x.TypeID] = struct{}{}
 		if x.Bits != 0 {
