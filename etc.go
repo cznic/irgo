@@ -139,44 +139,44 @@ func (p *exprList) pop() *exprNode {
 	return r
 }
 
-type codeNode struct {
-	Fallthrough *codeNode
+type node struct {
+	Fallthrough *node
 	Ops         []operation
-	Out         []*codeNode
+	Out         []*node
 	Stacks      []stack
 	invalid     bool
-	outm        map[*codeNode]struct{}
+	outm        map[*node]struct{}
 }
 
-func (c *codeNode) check() {
-	if c.invalid {
+func (n *node) check() {
+	if n.invalid {
 		panic("internal error")
 	}
 }
 
-func (c *codeNode) addEdge(dest *codeNode) {
-	c.check()
+func (n *node) addEdge(dest *node) {
+	n.check()
 	dest.check()
-	if c.outm == nil {
-		c.outm = map[*codeNode]struct{}{}
+	if n.outm == nil {
+		n.outm = map[*node]struct{}{}
 	}
-	if _, ok := c.outm[dest]; !ok {
-		c.Out = append(c.Out, dest)
-		c.outm[dest] = struct{}{}
+	if _, ok := n.outm[dest]; !ok {
+		n.Out = append(n.Out, dest)
+		n.outm[dest] = struct{}{}
 	}
 }
 
-func (c *codeNode) removeEdge(dest *codeNode) {
-	c.check()
+func (n *node) removeEdge(dest *node) {
+	n.check()
 	dest.check()
 	//TODO if _, ok := c.outm[dest]; !ok {
 	//TODO 	panic("internal error")
 	//TODO }
 
-	for i, v := range c.Out {
+	for i, v := range n.Out {
 		if v == dest {
-			c.Out = append(c.Out[:i:i], c.Out[i+1:]...)
-			delete(c.outm, dest)
+			n.Out = append(n.Out[:i:i], n.Out[i+1:]...)
+			delete(n.outm, dest)
 			return
 		}
 	}
@@ -184,33 +184,32 @@ func (c *codeNode) removeEdge(dest *codeNode) {
 	//TODO panic("internal error 174")
 }
 
-func (c *codeNode) append(i int, join *codeNode) {
-	for _, v := range join.Out {
-		c.addEdge(v)
+func (n *node) append(m *node) {
+	for _, v := range m.Out {
+		n.addEdge(v)
 	}
-	c.removeEdge(join)
-	j := 0
-	if _, ok := join.Ops[0].(*ir.Label); ok {
-		j++
+	n.removeEdge(m)
+	if _, ok := m.Ops[0].(*ir.Label); ok {
+		m.Ops[0] = nop
 	}
-	c.Ops = append(c.Ops[:i+1:i+1], join.Ops[j:]...)
-	c.Fallthrough = nil
-	join.invalid = true
+	n.Ops = n.Ops[:len(n.Ops)+len(m.Ops)]
+	n.Fallthrough = m.Fallthrough
+	m.invalid = true
 }
 
-type codeGraph struct {
+type graph struct {
 	*gen
 	ir.TypeCache
-	label2codeNode map[int]*codeNode
+	label2codeNode map[int]*node
 	land           map[int]int
 	lor            map[int]int
 }
 
-func newCodeGraph(gen *gen, ops []ir.Operation) (root *codeNode, labelsUsed map[int]struct{}) {
-	g := &codeGraph{
+func newGraph(gen *gen, ops []ir.Operation) (nodes []*node, labelsUsed map[int]struct{}) {
+	g := &graph{
 		TypeCache:      gen.tc,
 		gen:            gen,
-		label2codeNode: map[int]*codeNode{},
+		label2codeNode: map[int]*node{},
 		land:           map[int]int{},
 		lor:            map[int]int{},
 	}
@@ -219,14 +218,21 @@ func newCodeGraph(gen *gen, ops []ir.Operation) (root *codeNode, labelsUsed map[
 		out[i] = v
 	}
 	a := append(splitPoints(ops), len(ops))
-	var nodes []*codeNode
 	for i := range a[1:] {
-		nodes = append(nodes, &codeNode{Ops: out[a[i]:a[i+1]]})
+		nodes = append(nodes, &node{Ops: out[a[i]:a[i+1]]})
 	}
-	root, labelsUsed = g.addEdges(nodes)
-	root = g.computeStackStates(map[*codeNode]struct{}{}, root, stack{})
-	root = g.processExpressions(map[*codeNode]struct{}{}, root)
-	return root, labelsUsed
+
+	labelsUsed = g.addEdges(nodes)
+	g.computeStackStates(map[*node]struct{}{}, nodes[0], stack{})
+	g.processExpressions(map[*node]struct{}{}, nodes[0])
+	w := 0
+	for _, v := range nodes {
+		if !v.invalid {
+			nodes[w] = v
+			w++
+		}
+	}
+	return nodes[:w], labelsUsed
 }
 
 func splitPoints(ops []ir.Operation) sort.IntSlice {
@@ -293,12 +299,12 @@ func splitPoints(ops []ir.Operation) sort.IntSlice {
 	return a[:sortutil.Dedupe(a)]
 }
 
-func (g *codeGraph) addEdges(nodes []*codeNode) (root *codeNode, labelsUsed map[int]struct{}) {
+func (g *graph) addEdges(nodes []*node) map[int]struct{} {
 	for _, v := range nodes {
 		v.check()
 	}
 	// Collect symbol table.
-	labelsUsed = map[int]struct{}{}
+	labelsUsed := map[int]struct{}{}
 	for _, v := range nodes {
 		if x, ok := v.Ops[0].(*ir.Label); ok {
 			g.label2codeNode[label(x)] = v
@@ -409,12 +415,12 @@ func (g *codeGraph) addEdges(nodes []*codeNode) (root *codeNode, labelsUsed map[
 			}
 		}
 	}
-	return nodes[0], labelsUsed
+	return labelsUsed
 }
 
-func (g *codeGraph) ptrID(t ir.TypeID) ir.TypeID { return g.MustType(t).Pointer().ID() }
+func (g *graph) ptrID(t ir.TypeID) ir.TypeID { return g.MustType(t).Pointer().ID() }
 
-func (g *codeGraph) qptrID(t ir.TypeID, address bool) ir.TypeID {
+func (g *graph) qptrID(t ir.TypeID, address bool) ir.TypeID {
 	if address {
 		return g.ptrID(t)
 	}
@@ -492,13 +498,13 @@ expr op= expr.
 
 */
 
-func (g *codeGraph) computeStackStates(m map[*codeNode]struct{}, n *codeNode, s stack) *codeNode {
+func (g *graph) computeStackStates(m map[*node]struct{}, n *node, s stack) {
 	if n == nil {
-		return nil
+		return
 	}
 
 	if _, ok := m[n]; ok {
-		return n
+		return
 	}
 
 	n.check()
@@ -578,16 +584,14 @@ func (g *codeGraph) computeStackStates(m map[*codeNode]struct{}, n *codeNode, s 
 				panic("internal error")
 			}
 			n.Ops[i] = nop
-			n.append(i, g.label2codeNode[n0])
+			n.append(g.label2codeNode[n0])
 			n1 := int(x.NameID)
 			if n1 == 0 {
 				n1 = -x.Number
 			}
 			join := g.label2codeNode[n1]
-			ft := join.Fallthrough
 			join.Ops[0] = ternary
-			n.append(len(n.Ops)-1, join)
-			n.Fallthrough = ft
+			n.append(join)
 		case *ir.Jnz:
 			s = s.pop()
 			nn := int(x.NameID)
@@ -611,9 +615,11 @@ func (g *codeGraph) computeStackStates(m map[*codeNode]struct{}, n *codeNode, s 
 			case 1:
 				s = s.pushT(idInt32)
 				g.lor[nn]++
-				n.Ops[i] = lor // jnz A
+				n.Ops[i] = lor   // jnz A
+				n.Ops[i+1] = nop // drop
+				n.Ops[i+2] = nop // push 0
 				join := g.label2codeNode[nn]
-				n.append(i, join)
+				n.append(join)
 				m[join] = struct{}{}
 			default:
 				TODO("%s: %#05x %v %v", x.Pos(), i, g.lor[nn], s)
@@ -641,9 +647,11 @@ func (g *codeGraph) computeStackStates(m map[*codeNode]struct{}, n *codeNode, s 
 			case 1:
 				s = s.pushT(idInt32)
 				g.land[nn]++
-				n.Ops[i] = land // jz A
+				n.Ops[i] = land  // jz A
+				n.Ops[i+1] = nop // drop
+				n.Ops[i+2] = nop // push 1
 				join := g.label2codeNode[nn]
-				n.append(i, join)
+				n.append(join)
 				m[join] = struct{}{}
 			default:
 				TODO("%s: %#05x %v %v", x.Pos(), i, g.land[nn], s)
@@ -709,6 +717,8 @@ func (g *codeGraph) computeStackStates(m map[*codeNode]struct{}, n *codeNode, s 
 			// nop
 		case xop:
 			switch x {
+			case nop:
+				// nop
 			case ternary:
 				s = s.pop()
 			default:
@@ -725,10 +735,9 @@ func (g *codeGraph) computeStackStates(m map[*codeNode]struct{}, n *codeNode, s 
 	for _, v := range n.Out {
 		g.computeStackStates(m, v, s)
 	}
-	return n
 }
 
-func (g *codeGraph) processExpressionList(ops []operation, stacks []stack) (l exprList, _ int) {
+func (g *graph) processExpressionList(ops []operation, stacks []stack) (l exprList, _ int) {
 	for i, op := range ops {
 		var t ir.TypeID
 		if s := stacks[i]; len(s) != 0 {
@@ -828,13 +837,13 @@ func (g *codeGraph) processExpressionList(ops []operation, stacks []stack) (l ex
 	return l, len(ops)
 }
 
-func (g *codeGraph) processExpressions(m map[*codeNode]struct{}, n *codeNode) *codeNode {
+func (g *graph) processExpressions(m map[*node]struct{}, n *node) {
 	if n == nil {
-		return nil
+		return
 	}
 
 	if _, ok := m[n]; ok {
-		return n
+		return
 	}
 
 	n.check()
@@ -877,7 +886,6 @@ func (g *codeGraph) processExpressions(m map[*codeNode]struct{}, n *codeNode) *c
 	for _, v := range n.Out {
 		g.processExpressions(m, v)
 	}
-	return n
 }
 
 func varInfo(ops []ir.Operation) (nfo []varNfo) {

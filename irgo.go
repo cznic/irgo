@@ -605,7 +605,7 @@ func (g *gen) expression(n *exprNode) {
 		g.w("{\n")
 		for _, v := range a {
 			g.w("case ")
-			g.value(v.Value)
+			g.value(idInt32, v.Value)
 			g.w(": goto ")
 			switch l := v.Label; {
 			case l.NameID != 0:
@@ -663,7 +663,7 @@ func (g *gen) expression(n *exprNode) {
 	}
 }
 
-func (g *gen) emit(n *codeNode) {
+func (g *gen) emit(n *node) {
 	for _, op := range n.Ops {
 		switch x := op.(type) {
 		case *expr:
@@ -683,7 +683,7 @@ func (g *gen) emit(n *codeNode) {
 			}
 			nm := g.mangle(x.NameID, false, sc)
 			g.w("%s = ", nm)
-			g.value(x.Value)
+			g.value(x.TypeID, x.Value)
 			g.w("\n")
 		case *ir.Jmp:
 			g.w("goto ")
@@ -759,31 +759,15 @@ func (g *gen) functionDefinition(oi int, f *ir.FunctionDefinition) {
 		g.w("var %v %v\n", nm, g.typ2(v.def.TypeID))
 		g.w("_ = %v\n", nm)
 	}
-	var root *codeNode
-	root, g.f.labelsUsed = newCodeGraph(g, f.Body)
-	m := map[*codeNode]struct{}{}
-	var fn func(*codeNode)
-	fn = func(n *codeNode) {
-		if n == nil {
-			return
-		}
-
-		if _, ok := m[n]; ok {
-			return
-		}
-
-		m[n] = struct{}{}
-		g.emit(n)
-		fn(n.Fallthrough)
-		for _, v := range n.Out {
-			fn(v)
-		}
+	var nodes []*node
+	nodes, g.f.labelsUsed = newGraph(g, f.Body)
+	for _, v := range nodes {
+		g.emit(v)
 	}
-	fn(root)
 	g.w("}\n\n")
 }
 
-func (g *gen) value(v ir.Value) {
+func (g *gen) value(id ir.TypeID, v ir.Value) {
 	switch x := v.(type) {
 	case *ir.AddressValue:
 		if x.Label != 0 {
@@ -792,6 +776,19 @@ func (g *gen) value(v ir.Value) {
 		}
 
 		g.w("(uintptr(unsafe.Pointer(&%v))+%v)", g.mangle(x.NameID, x.Linkage == ir.ExternalLinkage, -1), x.Offset)
+	case *ir.CompositeValue:
+		switch t := g.tc.MustType(id); t.Kind() {
+		case ir.Array:
+			et := t.(*ir.ArrayType).Item.ID()
+			g.w("%v{", t)
+			for _, v := range x.Values {
+				g.value(et, v)
+				g.w(", ")
+			}
+			g.w("}")
+		default:
+			TODO("TODO782 %v", t.Kind())
+		}
 	case *ir.Float64Value:
 		g.w("%v", x.Value)
 	case *ir.Int32Value:
@@ -810,7 +807,7 @@ func (g *gen) dataDefinition(d *ir.DataDefinition) {
 
 	g.w("func init() {\n")
 	g.w("%s = ", nm)
-	g.value(d.Value)
+	g.value(d.TypeID, d.Value)
 	g.w("\n}\n\n")
 }
 
@@ -833,23 +830,6 @@ func (g *gen) gen() error {
 			panic("internal error")
 		}
 	}
-	if g.strings.Len() != 0 {
-		g.w("var strTab = []byte(\"")
-		for _, v := range g.strings.Bytes() {
-			switch {
-			case v == '\\':
-				g.out.WriteString(`\\`)
-			case v == '"':
-				g.out.WriteString(`\"`)
-			case v < ' ', v >= 0x7f:
-				fmt.Fprintf(g.out, `\x%02x`, v)
-			default:
-				g.out.WriteByte(v)
-			}
-		}
-		g.w("\")\n")
-		g.w("func str(n int) *int8 { return (*int8)(unsafe.Pointer(&strTab[n]))}\n")
-	}
 	g.w("func bool2int(b bool) int32 { if b { return 1}; return 0 }\n")
 	for _, v := range g.helpers(g.copies) {
 		g.w("func copy_%d(d, s *%[2]v) *%[2]v { *d = *s; return d }\n", v.TypeID, g.typ2(v.TypeID))
@@ -865,6 +845,23 @@ func (g *gen) gen() error {
 	}
 	for _, v := range g.helpers(g.stores) {
 		g.w("func store_%d(p *%[2]v, v %[2]v) %[2]v { *p = v; return v }\n", v.TypeID, g.typ2(v.TypeID))
+	}
+	if g.strings.Len() != 0 {
+		g.w("func str(n int) *int8 { return (*int8)(unsafe.Pointer(&strTab[n]))}\n")
+		g.w("var strTab = []byte(\"")
+		for _, v := range g.strings.Bytes() {
+			switch {
+			case v == '\\':
+				g.out.WriteString(`\\`)
+			case v == '"':
+				g.out.WriteString(`\"`)
+			case v < ' ', v >= 0x7f:
+				fmt.Fprintf(g.out, `\x%02x`, v)
+			default:
+				g.out.WriteByte(v)
+			}
+		}
+		g.w("\")\n")
 	}
 	return nil
 }
