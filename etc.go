@@ -144,19 +144,12 @@ type node struct {
 	Ops         []operation
 	Out         []*node
 	Stacks      []stack
-	invalid     bool
+	live        bool
 	outm        map[*node]struct{}
-}
-
-func (n *node) check() {
-	if n.invalid {
-		panic("internal error")
-	}
+	valid       bool
 }
 
 func (n *node) addEdge(dest *node) {
-	n.check()
-	dest.check()
 	if n.outm == nil {
 		n.outm = map[*node]struct{}{}
 	}
@@ -167,8 +160,6 @@ func (n *node) addEdge(dest *node) {
 }
 
 func (n *node) removeEdge(dest *node) {
-	n.check()
-	dest.check()
 	//TODO if _, ok := c.outm[dest]; !ok {
 	//TODO 	panic("internal error")
 	//TODO }
@@ -194,7 +185,7 @@ func (n *node) append(m *node) {
 	}
 	n.Ops = n.Ops[:len(n.Ops)+len(m.Ops)]
 	n.Fallthrough = m.Fallthrough
-	m.invalid = true
+	m.valid = false
 }
 
 type graph struct {
@@ -205,7 +196,7 @@ type graph struct {
 	lor            map[int]int
 }
 
-func newGraph(gen *gen, ops []ir.Operation) (nodes []*node, labelsUsed map[int]struct{}) {
+func newGraph(gen *gen, ops []ir.Operation) (nodes []*node) {
 	g := &graph{
 		TypeCache:      gen.tc,
 		gen:            gen,
@@ -219,20 +210,20 @@ func newGraph(gen *gen, ops []ir.Operation) (nodes []*node, labelsUsed map[int]s
 	}
 	a := append(splitPoints(ops), len(ops))
 	for i := range a[1:] {
-		nodes = append(nodes, &node{Ops: out[a[i]:a[i+1]]})
+		nodes = append(nodes, &node{Ops: out[a[i]:a[i+1]], valid: true})
 	}
 
-	labelsUsed = g.addEdges(nodes)
+	g.addEdges(nodes)
 	g.computeStackStates(map[*node]struct{}{}, nodes[0], stack{})
 	g.processExpressions(map[*node]struct{}{}, nodes[0])
 	w := 0
 	for _, v := range nodes {
-		if !v.invalid {
+		if v.valid && v.live {
 			nodes[w] = v
 			w++
 		}
 	}
-	return nodes[:w], labelsUsed
+	return nodes[:w]
 }
 
 func splitPoints(ops []ir.Operation) sort.IntSlice {
@@ -283,6 +274,7 @@ func splitPoints(ops []ir.Operation) sort.IntSlice {
 			*ir.Or,
 			*ir.PostIncrement,
 			*ir.PreIncrement,
+			*ir.PtrDiff,
 			*ir.Rem,
 			*ir.Result,
 			*ir.Store,
@@ -299,12 +291,8 @@ func splitPoints(ops []ir.Operation) sort.IntSlice {
 	return a[:sortutil.Dedupe(a)]
 }
 
-func (g *graph) addEdges(nodes []*node) map[int]struct{} {
-	for _, v := range nodes {
-		v.check()
-	}
+func (g *graph) addEdges(nodes []*node) {
 	// Collect symbol table.
-	labelsUsed := map[int]struct{}{}
 	for _, v := range nodes {
 		if x, ok := v.Ops[0].(*ir.Label); ok {
 			g.label2codeNode[label(x)] = v
@@ -321,22 +309,18 @@ func (g *graph) addEdges(nodes []*node) map[int]struct{} {
 				if n == 0 {
 					n = -x.Number
 				}
-				labelsUsed[n] = struct{}{}
 				node.addEdge(g.label2codeNode[n])
 			case *ir.Jz:
 				n := int(x.NameID)
 				if n == 0 {
 					n = -x.Number
 				}
-				labelsUsed[n] = struct{}{}
 				node.addEdge(g.label2codeNode[n])
-				node.addEdge(nodes[i+1]) //TODO- Now it makes one TCC test fail
 			case *ir.Jnz:
 				n := int(x.NameID)
 				if n == 0 {
 					n = -x.Number
 				}
-				labelsUsed[n] = struct{}{}
 				node.addEdge(g.label2codeNode[n])
 			case *ir.Switch:
 				for _, v := range x.Labels {
@@ -344,14 +328,12 @@ func (g *graph) addEdges(nodes []*node) map[int]struct{} {
 					if n == 0 {
 						n = -v.Number
 					}
-					labelsUsed[n] = struct{}{}
 					node.addEdge(g.label2codeNode[n])
 				}
 				n := int(x.Default.NameID)
 				if n == 0 {
 					n = -x.Default.Number
 				}
-				labelsUsed[n] = struct{}{}
 				node.addEdge(g.label2codeNode[n])
 			case
 				*ir.Add,
@@ -388,6 +370,7 @@ func (g *graph) addEdges(nodes []*node) map[int]struct{} {
 				*ir.Or,
 				*ir.PostIncrement,
 				*ir.PreIncrement,
+				*ir.PtrDiff,
 				*ir.Rem,
 				*ir.Result,
 				*ir.Return,
@@ -415,7 +398,6 @@ func (g *graph) addEdges(nodes []*node) map[int]struct{} {
 			}
 		}
 	}
-	return labelsUsed
 }
 
 func (g *graph) ptrID(t ir.TypeID) ir.TypeID { return g.MustType(t).Pointer().ID() }
@@ -499,7 +481,7 @@ expr op= expr.
 */
 
 func (g *graph) computeStackStates(m map[*node]struct{}, n *node, s stack) {
-	if n == nil {
+	if n == nil || !n.valid {
 		return
 	}
 
@@ -507,8 +489,8 @@ func (g *graph) computeStackStates(m map[*node]struct{}, n *node, s stack) {
 		return
 	}
 
-	n.check()
 	m[n] = struct{}{}
+	n.live = true
 	if len(s) != 0 {
 		TODO("%s: TODO stack(%v): %v\n\t%s", n.Ops[0].Pos(), len(s), n.Ops[0], s)
 	}
@@ -688,6 +670,8 @@ func (g *graph) computeStackStates(m map[*node]struct{}, n *node, s stack) {
 			}
 
 			s = s.pop().pushT(x.TypeID)
+		case *ir.PtrDiff:
+			s = s.pop().pop().pushT(x.TypeID)
 		case *ir.Rem:
 			s = s.pop().pop().pushT(x.TypeID)
 		case *ir.Result:
@@ -787,6 +771,7 @@ func (g *graph) processExpressionList(ops []operation, stacks []stack) (l exprLi
 			*ir.Mul,
 			*ir.Neq,
 			*ir.Or,
+			*ir.PtrDiff,
 			*ir.Rem,
 			*ir.Store,
 			*ir.Sub,
@@ -838,7 +823,7 @@ func (g *graph) processExpressionList(ops []operation, stacks []stack) (l exprLi
 }
 
 func (g *graph) processExpressions(m map[*node]struct{}, n *node) {
-	if n == nil {
+	if n == nil || !n.valid {
 		return
 	}
 
@@ -846,7 +831,6 @@ func (g *graph) processExpressions(m map[*node]struct{}, n *node) {
 		return
 	}
 
-	n.check()
 	m[n] = struct{}{}
 	var out []operation
 	for i := 0; i < len(n.Ops); {
