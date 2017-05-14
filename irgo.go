@@ -159,6 +159,8 @@ func (g *gen) typ0(buf *buffer.Bytes, t ir.Type) {
 	switch t.Kind() {
 	case ir.Int8:
 		buf.WriteString("int8 ")
+	case ir.Uint8:
+		buf.WriteString("uint8 ")
 	case ir.Int16:
 		buf.WriteString("int16 ")
 	case ir.Uint16:
@@ -609,6 +611,9 @@ func (g *gen) expression(n *exprNode) {
 		g.binop(n)
 	case *ir.Nil:
 		g.w("nil")
+	case *ir.Neg:
+		g.w("-")
+		g.expression(n.Childs[0])
 	case *ir.Not:
 		g.w("bool2int(")
 		g.expression(n.Childs[0])
@@ -883,6 +888,14 @@ func (g *gen) value(id ir.TypeID, v ir.Value) {
 				g.w(", ")
 			}
 			g.w("}")
+		case ir.Struct:
+			f := t.(*ir.StructOrUnionType).Fields
+			g.w("%v{", t)
+			for i, v := range x.Values {
+				g.value(f[i].ID(), v)
+				g.w(", ")
+			}
+			g.w("}")
 		default:
 			TODO("TODO782 %v", t.Kind())
 		}
@@ -899,6 +912,13 @@ func (g *gen) value(id ir.TypeID, v ir.Value) {
 			}
 		default:
 			g.w("%v", x.Value)
+		}
+	case *ir.Int64Value:
+		switch t.Kind() {
+		case ir.Uint64:
+			g.w("uint64(%v)", uint64(x.Value))
+		default:
+			TODO("%v", t.Kind())
 		}
 	case *ir.StringValue:
 		if x.Offset != 0 {

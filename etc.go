@@ -548,10 +548,14 @@ func (g *graph) computeStackStates(m map[*node]struct{}, n *node, s stack) {
 		case *ir.Load:
 			v := s.tos()
 			s = s.pop().pushT(g.tc.MustType(v.TypeID).(*ir.PointerType).Element.ID())
+		case *ir.Lsh:
+			s = s.pop().pop().pushT(x.TypeID)
 		case *ir.Mul:
 			s = s.pop().pop().pushT(x.TypeID)
 		case *ir.Nil:
 			s = s.pushT(x.TypeID)
+		case *ir.Neg:
+			s = s.pop().pushT(x.TypeID)
 		case *ir.Or:
 			s = s.pop().pop().pushT(x.TypeID)
 		case *ir.PostIncrement:
@@ -571,6 +575,8 @@ func (g *graph) computeStackStates(m map[*node]struct{}, n *node, s stack) {
 		case *ir.PtrDiff:
 			s = s.pop().pop().pushT(x.TypeID)
 		case *ir.Rem:
+			s = s.pop().pop().pushT(x.TypeID)
+		case *ir.Rsh:
 			s = s.pop().pop().pushT(x.TypeID)
 		case *ir.Result:
 			s = s.pushT(g.qptrID(g.gen.f.t.Results[x.Index].ID(), x.Address))
@@ -649,6 +655,7 @@ func (g *graph) processExpressionList(ops []operation, stacks []stack) (l exprLi
 			*ir.Jnz,
 			*ir.Jz,
 			*ir.Load,
+			*ir.Neg,
 			*ir.Not,
 			*ir.PostIncrement,
 			*ir.PreIncrement,
@@ -665,12 +672,14 @@ func (g *graph) processExpressionList(ops []operation, stacks []stack) (l exprLi
 			*ir.Geq,
 			*ir.Gt,
 			*ir.Leq,
+			*ir.Lsh,
 			*ir.Lt,
 			*ir.Mul,
 			*ir.Neq,
 			*ir.Or,
 			*ir.PtrDiff,
 			*ir.Rem,
+			*ir.Rsh,
 			*ir.Store,
 			*ir.Sub,
 			*ir.Xor:
