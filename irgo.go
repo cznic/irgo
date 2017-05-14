@@ -6,6 +6,7 @@
 package irgo
 
 import (
+	"bytes"
 	"fmt"
 	"go/token"
 	"io"
@@ -358,7 +359,6 @@ func (g *gen) expression(n *exprNode) {
 	case
 		*ir.Jnz,
 		*ir.Jz,
-		*ir.Drop,
 		*ir.Switch:
 
 		// nop
@@ -933,6 +933,7 @@ func (g *gen) helpers(m map[ir.TypeID]struct{}) (r []typeNfo) {
 }
 
 func (g *gen) gen() error {
+	g.w("package foo\n")
 	for i, v := range g.obj {
 		switch x := v.(type) {
 		case *ir.FunctionDefinition:
@@ -984,32 +985,36 @@ func (g *gen) gen() error {
 		}
 		g.w("\")\n")
 	}
-	return nil
+	return newOpt(g).opt()
 }
 
-// New writes Go code generated from obj to out. No package clause is
-// generated.  The result is not formatted. The qualifier function is called
-// for implementation defined functions.  It must return the package qualifier,
-// if any, that should be used to call the implementation defined function.
+// New writes Go code generated from obj to out.  No package or import clause
+// is generated.  The qualifier function is called for implementation defined
+// functions.  It must return the package qualifier, if any, that should be
+// used to call the implementation defined function.
 func New(obj []ir.Object, out io.Writer, qualifier func(*ir.FunctionDefinition) string) (err error) {
 	var g *gen
-	if !Testing {
-		defer func() {
-			switch x := recover().(type) {
-			case nil:
-				_, err = g.out.WriteTo(out)
-			case error:
-				err = x
-			default:
-				err = fmt.Errorf("irgo.New: PANIC: %v", x)
-			}
+
+	defer func() {
+		switch x := recover().(type) {
+		case nil:
+			b := g.out.Bytes()
+			i := bytes.IndexByte(b, '\n')
+			_, err = out.Write(b[i+1:]) // Remove package clause.
 			if e := g.out.Close(); e != nil && err == nil {
 				err = e
 			}
-		}()
-	}
+			return
+		case error:
+			err = x
+		default:
+			err = fmt.Errorf("irgo.New: PANIC: %v", x)
+		}
+		if err != nil && Testing {
+			panic(err)
+		}
+	}()
 
 	g = newGen(obj, qualifier)
 	return g.gen()
-
 }

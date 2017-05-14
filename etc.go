@@ -160,10 +160,6 @@ func (n *node) addEdge(dest *node) {
 }
 
 func (n *node) removeEdge(dest *node) {
-	//TODO if _, ok := c.outm[dest]; !ok {
-	//TODO 	panic("internal error")
-	//TODO }
-
 	for i, v := range n.Out {
 		if v == dest {
 			n.Out = append(n.Out[:i:i], n.Out[i+1:]...)
@@ -171,8 +167,6 @@ func (n *node) removeEdge(dest *node) {
 			return
 		}
 	}
-
-	//TODO panic("internal error 174")
 }
 
 func (n *node) append(m *node) {
@@ -229,7 +223,7 @@ func newGraph(gen *gen, ops []ir.Operation) (nodes []*node) {
 func splitPoints(ops []ir.Operation) sort.IntSlice {
 	a := sort.IntSlice{0}
 	for i, op := range ops {
-		switch x := op.(type) {
+		switch op.(type) {
 		case
 			//TODO 	*ir.JmpP,
 			*ir.Jmp,
@@ -238,54 +232,6 @@ func splitPoints(ops []ir.Operation) sort.IntSlice {
 			a = append(a, i+1)
 		case *ir.Label:
 			a = append(a, i)
-		case
-			*ir.Add,
-			*ir.AllocResult,
-			*ir.And,
-			*ir.Argument,
-			*ir.Arguments,
-			*ir.BeginScope,
-			*ir.Bool,
-			*ir.Call,
-			*ir.CallFP,
-			*ir.Const32,
-			*ir.Const64,
-			*ir.Convert,
-			*ir.Copy,
-			*ir.Div,
-			*ir.Drop,
-			*ir.Dup,
-			*ir.Element,
-			*ir.EndScope,
-			*ir.Eq,
-			*ir.Field,
-			*ir.Geq,
-			*ir.Global,
-			*ir.Gt,
-			*ir.Jnz,
-			*ir.Jz,
-			*ir.Leq,
-			*ir.Load,
-			*ir.Lt,
-			*ir.Mul,
-			*ir.Neq,
-			*ir.Nil,
-			*ir.Not,
-			*ir.Or,
-			*ir.PostIncrement,
-			*ir.PreIncrement,
-			*ir.PtrDiff,
-			*ir.Rem,
-			*ir.Result,
-			*ir.Store,
-			*ir.StringConst,
-			*ir.Sub,
-			*ir.Variable,
-			*ir.VariableDeclaration,
-			*ir.Xor:
-			// nop
-		default:
-			TODO("%s: %T", x.Pos(), x)
 		}
 	}
 	return a[:sortutil.Dedupe(a)]
@@ -335,54 +281,6 @@ func (g *graph) addEdges(nodes []*node) {
 					n = -x.Default.Number
 				}
 				node.addEdge(g.label2codeNode[n])
-			case
-				*ir.Add,
-				*ir.AllocResult,
-				*ir.And,
-				*ir.Argument,
-				*ir.Arguments,
-				*ir.BeginScope,
-				*ir.Bool,
-				*ir.Call,
-				*ir.CallFP,
-				*ir.Const32,
-				*ir.Const64,
-				*ir.Convert,
-				*ir.Copy,
-				*ir.Div,
-				*ir.Drop,
-				*ir.Dup,
-				*ir.Element,
-				*ir.EndScope,
-				*ir.Eq,
-				*ir.Field,
-				*ir.Geq,
-				*ir.Global,
-				*ir.Gt,
-				*ir.Label,
-				*ir.Leq,
-				*ir.Load,
-				*ir.Lt,
-				*ir.Mul,
-				*ir.Neq,
-				*ir.Nil,
-				*ir.Not,
-				*ir.Or,
-				*ir.PostIncrement,
-				*ir.PreIncrement,
-				*ir.PtrDiff,
-				*ir.Rem,
-				*ir.Result,
-				*ir.Return,
-				*ir.Store,
-				*ir.StringConst,
-				*ir.Sub,
-				*ir.Variable,
-				*ir.VariableDeclaration,
-				*ir.Xor:
-				// nop
-			default:
-				TODO("%s: %T", x.Pos(), x)
 			}
 		}
 		if i+1 < len(nodes) {
