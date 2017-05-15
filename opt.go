@@ -59,6 +59,7 @@ func (o *opt) stmt(n *ast.Stmt) {
 	case *ast.ExprStmt:
 		switch y := x.X.(type) {
 		case *ast.CallExpr:
+			o.expr(&x.X)
 			switch z := y.Fun.(type) {
 			case *ast.Ident:
 				switch {
@@ -71,7 +72,6 @@ func (o *opt) stmt(n *ast.Stmt) {
 						return
 					}
 
-					o.ver++
 					var lhs ast.Expr
 					switch w := y.Args[0].(type) {
 					case *ast.CallExpr:
@@ -81,8 +81,10 @@ func (o *opt) stmt(n *ast.Stmt) {
 					case *ast.UnaryExpr:
 						lhs = w.X
 					default:
-						TODO("%s: %T", o.pos(w), w)
+						return
+						//TODO TODO("%s: %T", o.pos(w), w)
 					}
+					o.ver++
 					*n = &ast.AssignStmt{
 						Lhs: []ast.Expr{lhs},
 						Tok: token.ASSIGN,
@@ -156,6 +158,9 @@ func (o *opt) expr(n *ast.Expr) {
 	case *ast.IndexExpr:
 		o.expr(&x.X)
 		o.expr(&x.Index)
+	case *ast.KeyValueExpr:
+		o.expr(&x.Key)
+		o.expr(&x.Value)
 	case *ast.ParenExpr:
 		switch y := x.X.(type) {
 		case *ast.CallExpr:

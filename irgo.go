@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"unsafe"
 
 	"github.com/cznic/internal/buffer"
 	"github.com/cznic/ir"
@@ -189,6 +190,15 @@ func (g *gen) typ0(buf *buffer.Bytes, t ir.Type) {
 			buf.WriteByte(';')
 		}
 		buf.WriteString("}")
+	case ir.Union:
+		buf.WriteString("struct{_ [0]struct{")
+		for i, v := range t.(*ir.StructOrUnionType).Fields {
+			fmt.Fprintf(buf, "X%v ", i)
+			g.typ0(buf, v)
+			buf.WriteByte(';')
+		}
+		fmt.Fprintf(buf, "}; U [%v]byte", g.model.Sizeof(t))
+		buf.WriteString("}")
 	case ir.Pointer:
 		if t.ID() == idVoidPtr {
 			buf.WriteString("uintptr ")
@@ -335,6 +345,20 @@ func (g *gen) binop(n *exprNode) {
 	g.expression(n.Childs[1])
 }
 
+func (g *gen) shift(n *exprNode) {
+	g.expression(n.Childs[0])
+	switch x := n.Op.(type) {
+	case *ir.Lsh:
+		g.w("<<")
+	case *ir.Rsh:
+		g.w(">>")
+	default:
+		TODO("%s: %T", n.Op.Pos(), x)
+	}
+	g.w("uint")
+	g.expression(n.Childs[1])
+}
+
 func (g *gen) bool(n *exprNode) {
 	g.w("(")
 	g.expression(n)
@@ -448,9 +472,21 @@ func (g *gen) expression(n *exprNode) {
 			}
 		}
 
-		switch x.TypeID {
-		case idInt32:
+		switch t := g.tc.MustType(x.TypeID); t.Kind() {
+		case ir.Pointer:
+			g.w("uintptr(%v)", uintptr(x.Value))
+		case ir.Int8:
+			g.w("int8(%v) ", int8(x.Value))
+		case ir.Uint8:
+			g.w("byte(%v) ", byte(x.Value))
+		case ir.Uint16:
+			g.w("uint16(%v) ", uint16(x.Value))
+		case ir.Int32:
 			g.w("int32(%v) ", x.Value)
+		case ir.Uint32:
+			g.w("uint32(%v) ", uint32(x.Value))
+		case ir.Float32:
+			g.w("float32(%v) ", math.Float32frombits(uint32(x.Value)))
 		default:
 			TODO("%s: %v", x.Pos(), x.TypeID)
 		}
@@ -477,9 +513,8 @@ func (g *gen) expression(n *exprNode) {
 			g.w("unsafe.Pointer(")
 			switch {
 			case g.tc.MustType(n.Childs[0].TypeID).Kind() != ir.Pointer:
-				g.w("uintptr(")
+				g.w("uintptr")
 				g.expression(n.Childs[0])
-				g.w(")")
 			default:
 				g.expression(n.Childs[0])
 			}
@@ -495,6 +530,9 @@ func (g *gen) expression(n *exprNode) {
 		g.w(",")
 		g.expression(n.Childs[1])
 		g.w(")")
+	case *ir.Cpl:
+		g.w("^")
+		g.expression(n.Childs[0])
 	case *ir.Drop:
 		g.w("drop(")
 		g.expression(n.Childs[0])
@@ -509,23 +547,32 @@ func (g *gen) expression(n *exprNode) {
 		if !x.Address {
 			g.w("*")
 		}
-		g.w("(*%v)(unsafe.Pointer(uintptr(unsafe.Pointer(", g.typ(et))
+		g.w("(*%v)(unsafe.Pointer(uintptr(unsafe.Pointer", g.typ(et))
 		g.expression(n.Childs[0])
 		s := "+"
 		if x.Neg {
 			s = "-"
 		}
-		g.w("))%s%v*uintptr", s, sz)
+		g.w(")%s%v*uintptr", s, sz)
 		g.expression(n.Childs[1])
 		g.w("))")
 	case *ir.Field:
-		if x.Address {
-			g.w("&")
+		switch t := g.tc.MustType(n.Childs[0].TypeID).(*ir.PointerType).Element; t.Kind() {
+		case ir.Union:
+			if !x.Address {
+				g.w("*")
+			}
+			g.w("(*%v)(unsafe.Pointer", g.typ(t.(*ir.StructOrUnionType).Fields[x.Index]))
+			g.expression(n.Childs[0])
+			g.w(")")
+		default:
+			if x.Address {
+				g.w("&")
+			}
+			g.w("(")
+			g.expression(n.Childs[0])
+			g.w(".X%v)", x.Index)
 		}
-
-		g.w("(")
-		g.expression(n.Childs[0])
-		g.w(".X%v)", x.Index)
 	case *ir.Global:
 		t := g.tc.MustType(g.obj[x.Index].Base().TypeID)
 		nm := g.mangle(x.NameID, x.Linkage == ir.ExternalLinkage, -1)
@@ -590,6 +637,11 @@ func (g *gen) expression(n *exprNode) {
 
 		g.expression(n.Childs[0])
 	case
+		*ir.Lsh,
+		*ir.Rsh:
+
+		g.shift(n)
+	case
 		*ir.Eq,
 		*ir.Geq,
 		*ir.Gt,
@@ -649,11 +701,11 @@ func (g *gen) expression(n *exprNode) {
 	case *ir.PtrDiff:
 		sz := g.model.Sizeof(g.tc.MustType(x.PtrType).(*ir.PointerType).Element)
 		g.w("%v(((", x.TypeID)
-		g.w("uintptr(unsafe.Pointer(")
+		g.w("uintptr(unsafe.Pointer")
 		g.expression(n.Childs[0])
-		g.w("))-uintptr(unsafe.Pointer(")
+		g.w(")-uintptr(unsafe.Pointer")
 		g.expression(n.Childs[1])
-		g.w(")))/%v)", sz)
+		g.w("))/%v)", sz)
 		g.w(")")
 	case *ir.Result:
 		if x.Address {
@@ -696,7 +748,7 @@ func (g *gen) expression(n *exprNode) {
 		g.w("{\n")
 		for _, v := range a {
 			g.w("case ")
-			g.value(idInt32, v.Value)
+			g.value(x.Pos(), idInt32, v.Value)
 			g.w(": goto ")
 			switch l := v.Label; {
 			case l.NameID != 0:
@@ -774,7 +826,7 @@ func (g *gen) emit(n *node) {
 			}
 			nm := g.mangle(x.NameID, false, sc)
 			g.w("%s = ", nm)
-			g.value(x.TypeID, x.Value)
+			g.value(x.Pos(), x.TypeID, x.Value)
 			g.w("\n")
 		case *ir.Jmp:
 			g.w("goto ")
@@ -854,7 +906,25 @@ func (g *gen) functionDefinition(oi int, f *ir.FunctionDefinition) {
 	g.w("}\n\n")
 }
 
-func (g *gen) value(id ir.TypeID, v ir.Value) {
+func (g *gen) unionValue(pos token.Position, ft ir.Type, val []ir.Value) []byte {
+	switch {
+	case len(val) == 0:
+		return nil
+	case len(val) != 1:
+		TODO("%s: %v, %v", pos, ft, val)
+	}
+
+	b := make([]byte, g.model.Sizeof(ft))
+	switch ft.Kind() {
+	case ir.Int32:
+		*(*int32)(unsafe.Pointer(&b[0])) = val[0].(*ir.Int32Value).Value
+	default:
+		TODO("%s: %v, %T(%v)", pos, ft, val[0], val[0])
+	}
+	return b
+}
+
+func (g *gen) value(pos token.Position, id ir.TypeID, v ir.Value) {
 	t := g.tc.MustType(id)
 	switch x := v.(type) {
 	case *ir.AddressValue:
@@ -882,22 +952,42 @@ func (g *gen) value(id ir.TypeID, v ir.Value) {
 		switch t := g.tc.MustType(id); t.Kind() {
 		case ir.Array:
 			et := t.(*ir.ArrayType).Item.ID()
-			g.w("%v{", t)
-			for _, v := range x.Values {
-				g.value(et, v)
-				g.w(", ")
+			g.w("%v{", g.typ(t))
+			if !isZeroValue(x) {
+				for _, v := range x.Values {
+					g.value(pos, et, v)
+					g.w(", ")
+				}
 			}
 			g.w("}")
 		case ir.Struct:
 			f := t.(*ir.StructOrUnionType).Fields
-			g.w("%v{", t)
-			for i, v := range x.Values {
-				g.value(f[i].ID(), v)
-				g.w(", ")
+			g.w("%v{", g.typ(t))
+			if !isZeroValue(x) {
+				for i, v := range x.Values {
+					g.value(pos, f[i].ID(), v)
+					g.w(", ")
+				}
+			}
+			g.w("}")
+		case ir.Union:
+			ft := t.(*ir.StructOrUnionType).Fields[0]
+			g.w("%v{", g.typ(t))
+			if !isZeroValue(x) {
+				g.w("U: [%v]byte{", g.model.Sizeof(t))
+				for _, v := range g.unionValue(pos, ft, x.Values) {
+					switch {
+					case v < 10:
+						g.w("%v,", v)
+					default:
+						g.w("%#02x, ", v)
+					}
+				}
+				g.w("}")
 			}
 			g.w("}")
 		default:
-			TODO("TODO782 %v", t.Kind())
+			TODO("%s: TODO782 %v:%v", pos, t, t.Kind())
 		}
 	case *ir.Float64Value:
 		g.w("%v", x.Value)
@@ -908,7 +998,7 @@ func (g *gen) value(id ir.TypeID, v ir.Value) {
 			case 0:
 				g.w("nil")
 			default:
-				TODO("")
+				TODO("%s: TODO958 %v:%v", pos, t, t.Kind())
 			}
 		default:
 			g.w("%v", x.Value)
@@ -934,13 +1024,13 @@ func (g *gen) value(id ir.TypeID, v ir.Value) {
 func (g *gen) dataDefinition(d *ir.DataDefinition) {
 	nm := g.mangle(d.NameID, d.Linkage == ir.ExternalLinkage, -1)
 	g.w("var %s %s // %s\n\n", nm, g.typ2(d.TypeID), g.pos(d.Position))
-	if d.Value == nil {
+	if isZeroValue(d.Value) {
 		return
 	}
 
 	g.w("func init() {\n")
 	g.w("%s = ", nm)
-	g.value(d.TypeID, d.Value)
+	g.value(d.Position, d.TypeID, d.Value)
 	g.w("\n}\n\n")
 }
 

@@ -27,11 +27,17 @@ const (
 var (
 	_ operation = xop(0)
 
+	idFloat32 = ir.TypeID(dict.SID("float32"))
 	idFloat64 = ir.TypeID(dict.SID("float64"))
+	idInt16   = ir.TypeID(dict.SID("int16"))
 	idInt32   = ir.TypeID(dict.SID("int32"))
 	idInt64   = ir.TypeID(dict.SID("int64"))
+	idInt8    = ir.TypeID(dict.SID("int8"))
 	idMain    = ir.NameID(dict.SID("main"))
+	idUint16  = ir.TypeID(dict.SID("uint16"))
+	idUint32  = ir.TypeID(dict.SID("uint32"))
 	idUint64  = ir.TypeID(dict.SID("uint64"))
+	idUint8   = ir.TypeID(dict.SID("uint8"))
 	idVoidPtr = ir.TypeID(dict.SID("*struct{}"))
 
 	hooks = strutil.PrettyPrintHooks{
@@ -422,6 +428,8 @@ func (g *graph) computeStackStates(m map[*node]struct{}, n *node, s stack) {
 			s = s.pop().pushT(x.Result)
 		case *ir.Copy:
 			s = s.pop()
+		case *ir.Cpl:
+			s = s.pop().pushT(x.TypeID)
 		case *ir.Div:
 			s = s.pop().pop().pushT(x.TypeID)
 		case *ir.Drop:
@@ -650,6 +658,7 @@ func (g *graph) processExpressionList(ops []operation, stacks []stack) (l exprLi
 		case
 			*ir.Bool,
 			*ir.Convert,
+			*ir.Cpl,
 			*ir.Drop,
 			*ir.Field,
 			*ir.Jnz,
@@ -743,7 +752,9 @@ func (g *graph) processExpressions(m map[*node]struct{}, n *node) {
 	for i := 0; i < len(n.Ops); {
 		switch x := n.Ops[i].(type) {
 		case
+			*ir.AllocResult,
 			*ir.Argument,
+			*ir.Call,
 			*ir.Const32,
 			*ir.Global,
 			*ir.Result,
@@ -756,10 +767,8 @@ func (g *graph) processExpressions(m map[*node]struct{}, n *node) {
 			}
 			i += nodes
 		case
-			*ir.AllocResult,
 			*ir.Arguments,
 			*ir.BeginScope,
-			*ir.Call,
 			*ir.EndScope,
 			*ir.Jmp,
 			*ir.Label,
@@ -829,4 +838,35 @@ func label(l *ir.Label) int {
 		n = -l.Number
 	}
 	return n
+}
+
+func isZeroValue(v ir.Value) bool {
+	switch x := v.(type) {
+	case nil:
+		return true
+	case *ir.AddressValue:
+		return false
+	case *ir.CompositeValue:
+		for _, v := range x.Values {
+			if !isZeroValue(v) {
+				return false
+			}
+		}
+		return true
+	case *ir.Int32Value:
+		return x.Value == 0
+	case *ir.Int64Value:
+		return x.Value == 0
+	case *ir.Float32Value:
+		return x.Value == 0
+	case *ir.Float64Value:
+		return x.Value == 0
+	case *ir.StringValue:
+		return false
+	default:
+		fmt.Printf("isZeroValue %T\n", x)
+		return false
+		//TODO TODO("isZeroValue: %T", x)
+	}
+	panic("internal error")
 }
