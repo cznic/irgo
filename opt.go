@@ -64,8 +64,12 @@ func (o *opt) stmt(n *ast.Stmt) {
 			case *ast.Ident:
 				switch {
 				case z.Name == "drop":
-					o.ver++
-					x.X = y.Args[0]
+					if zz, ok := y.Args[0].(*ast.CallExpr); ok {
+						if zzz, ok := zz.Fun.(*ast.Ident); ok && strings.HasPrefix(zzz.Name, "store_") {
+							o.ver++
+							x.X = y.Args[0]
+						}
+					}
 				case strings.HasPrefix(z.Name, "store_"):
 					if len(y.Args) != 2 {
 						o.expr(&x.X)
@@ -153,6 +157,8 @@ func (o *opt) expr(n *ast.Expr) {
 		}
 	case *ast.FuncLit:
 		o.blockStmt(x.Body)
+	case *ast.FuncType:
+		// nop
 	case *ast.Ident:
 		// nop
 	case *ast.IndexExpr:

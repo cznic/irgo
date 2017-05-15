@@ -27,18 +27,20 @@ const (
 var (
 	_ operation = xop(0)
 
-	idFloat32 = ir.TypeID(dict.SID("float32"))
-	idFloat64 = ir.TypeID(dict.SID("float64"))
-	idInt16   = ir.TypeID(dict.SID("int16"))
-	idInt32   = ir.TypeID(dict.SID("int32"))
-	idInt64   = ir.TypeID(dict.SID("int64"))
-	idInt8    = ir.TypeID(dict.SID("int8"))
-	idMain    = ir.NameID(dict.SID("main"))
-	idUint16  = ir.TypeID(dict.SID("uint16"))
-	idUint32  = ir.TypeID(dict.SID("uint32"))
-	idUint64  = ir.TypeID(dict.SID("uint64"))
-	idUint8   = ir.TypeID(dict.SID("uint8"))
-	idVoidPtr = ir.TypeID(dict.SID("*struct{}"))
+	idComplex128 = ir.TypeID(dict.SID("complex128"))
+	idComplex64  = ir.TypeID(dict.SID("complex64"))
+	idFloat32    = ir.TypeID(dict.SID("float32"))
+	idFloat64    = ir.TypeID(dict.SID("float64"))
+	idInt16      = ir.TypeID(dict.SID("int16"))
+	idInt32      = ir.TypeID(dict.SID("int32"))
+	idInt64      = ir.TypeID(dict.SID("int64"))
+	idInt8       = ir.TypeID(dict.SID("int8"))
+	idMain       = ir.NameID(dict.SID("main"))
+	idUint16     = ir.TypeID(dict.SID("uint16"))
+	idUint32     = ir.TypeID(dict.SID("uint32"))
+	idUint64     = ir.TypeID(dict.SID("uint64"))
+	idUint8      = ir.TypeID(dict.SID("uint8"))
+	idVoidPtr    = ir.TypeID(dict.SID("*struct{}"))
 
 	hooks = strutil.PrettyPrintHooks{
 		reflect.TypeOf(ir.NameID(0)): func(f strutil.Formatter, v interface{}, prefix string, suffix string) {
@@ -428,6 +430,8 @@ func (g *graph) computeStackStates(m map[*node]struct{}, n *node, s stack) {
 			s = s.pop().pushT(x.Result)
 		case *ir.Copy:
 			s = s.pop()
+		case *ir.Const:
+			s = s.pushT(x.TypeID)
 		case *ir.Cpl:
 			s = s.pop().pushT(x.TypeID)
 		case *ir.Div:
@@ -696,6 +700,7 @@ func (g *graph) processExpressionList(ops []operation, stacks []stack) (l exprLi
 			l.binop(x, t)
 		case
 			*ir.Argument,
+			*ir.Const,
 			*ir.Const32,
 			*ir.Const64,
 			*ir.Global,
@@ -756,7 +761,9 @@ func (g *graph) processExpressions(m map[*node]struct{}, n *node) {
 			*ir.Argument,
 			*ir.Call,
 			*ir.Const32,
+			*ir.Const64,
 			*ir.Global,
+			*ir.Nil,
 			*ir.Result,
 			*ir.StringConst,
 			*ir.Variable:
@@ -861,12 +868,16 @@ func isZeroValue(v ir.Value) bool {
 		return x.Value == 0
 	case *ir.Float64Value:
 		return x.Value == 0
+	case *ir.Complex64Value:
+		return x.Value == 0
+	case *ir.Complex128Value:
+		return x.Value == 0
 	case *ir.StringValue:
 		return false
-	default:
-		fmt.Printf("isZeroValue %T\n", x)
+	case *ir.WideStringValue:
 		return false
-		//TODO TODO("isZeroValue: %T", x)
+	default:
+		TODO("isZeroValue %T", x)
 	}
 	panic("internal error")
 }

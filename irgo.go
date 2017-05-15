@@ -85,6 +85,7 @@ type gen struct {
 	postIncs  map[ir.TypeID]struct{}
 	preIncs   map[ir.TypeID]struct{}
 	qualifier func(*ir.FunctionDefinition) string
+	storebits map[ir.TypeID]struct{}
 	stores    map[ir.TypeID]struct{}
 	strTab    map[ir.StringID]int
 	strings   buffer.Bytes
@@ -107,6 +108,7 @@ func newGen(obj []ir.Object, qualifier func(*ir.FunctionDefinition) string) *gen
 		postIncs:  map[ir.TypeID]struct{}{},
 		preIncs:   map[ir.TypeID]struct{}{},
 		qualifier: qualifier,
+		storebits: map[ir.TypeID]struct{}{},
 		stores:    map[ir.TypeID]struct{}{},
 		strTab:    map[ir.StringID]int{},
 		tc:        ir.TypeCache{},
@@ -178,6 +180,10 @@ func (g *gen) typ0(buf *buffer.Bytes, t ir.Type) {
 		buf.WriteString("float32 ")
 	case ir.Float64:
 		buf.WriteString("float64 ")
+	case ir.Complex64:
+		buf.WriteString("complex64 ")
+	case ir.Complex128:
+		buf.WriteString("complex128 ")
 	case ir.Array:
 		at := t.(*ir.ArrayType)
 		fmt.Fprintf(buf, "[%v]", at.Items)
@@ -479,6 +485,8 @@ func (g *gen) expression(n *exprNode) {
 			g.w("int8(%v) ", int8(x.Value))
 		case ir.Uint8:
 			g.w("byte(%v) ", byte(x.Value))
+		case ir.Int16:
+			g.w("int16(%v) ", int16(x.Value))
 		case ir.Uint16:
 			g.w("uint16(%v) ", uint16(x.Value))
 		case ir.Int32:
@@ -492,6 +500,8 @@ func (g *gen) expression(n *exprNode) {
 		}
 	case *ir.Const64:
 		switch x.TypeID {
+		case idComplex64:
+			g.w("complex(float32(%v), 0) ", math.Float64frombits(uint64(x.Value)))
 		case idFloat64:
 			g.w("float64(%v) ", math.Float64frombits(uint64(x.Value)))
 		case idInt64:
@@ -714,15 +724,26 @@ func (g *gen) expression(n *exprNode) {
 
 		g.w("(r%v)", x.Index)
 	case *ir.Store:
+		_, asop := n.Childs[0].Op.(*ir.Dup)
 		if x.Bits != 0 {
-			TODO("%s", x.Pos())
+			g.storebits[x.TypeID] = struct{}{}
+			g.w("storebits_%d(", x.TypeID)
+			if asop {
+				TODO("%s", x.Pos())
+				return
+			}
+
+			g.expression(n.Childs[0])
+			g.w(", (")
+			g.expression(n.Childs[1])
+			g.w("<<%v), %v, %v)", x.BitOffset, (uint64(1)<<uint(x.Bits)-1)<<uint(x.BitOffset), x.BitOffset)
+			return
 		}
 
 		g.stores[x.TypeID] = struct{}{}
 		g.w("store_%d(", x.TypeID)
-		if _, ok := n.Childs[0].Op.(*ir.Dup); ok {
-			t := g.typ2(x.TypeID)
-			g.w("func()(*%[1]v, %[1]v){ p := ", t)
+		if asop {
+			g.w("func()(*%[1]v, %[1]v){ p := ", g.typ2(x.TypeID))
 			g.expression(n.Childs[0].Childs[0])
 			g.w("; return p,")
 			g.expression(n.Childs[1])
@@ -802,7 +823,8 @@ func (g *gen) expression(n *exprNode) {
 			TODO("%T(%v)", x, x)
 		}
 	default:
-		TODO("%s: %T\n%s", x.Pos(), x, n.tree())
+		//TODO("%s: %T\n%s", x.Pos(), x, n.tree())
+		TODO("%s: %T", x.Pos(), x)
 	}
 }
 
@@ -965,6 +987,11 @@ func (g *gen) value(pos token.Position, id ir.TypeID, v ir.Value) {
 			g.w("%v{", g.typ(t))
 			if !isZeroValue(x) {
 				for i, v := range x.Values {
+					if v == nil {
+						continue
+					}
+
+					g.w("X%v: ", i)
 					g.value(pos, f[i].ID(), v)
 					g.w(", ")
 				}
@@ -989,6 +1016,10 @@ func (g *gen) value(pos token.Position, id ir.TypeID, v ir.Value) {
 		default:
 			TODO("%s: TODO782 %v:%v", pos, t, t.Kind())
 		}
+	case *ir.Complex64Value:
+		g.w("complex(float32(%v), float32(%v))", real(x.Value), imag(x.Value))
+	case *ir.Float32Value:
+		g.w("float32(%v)", x.Value)
 	case *ir.Float64Value:
 		g.w("%v", x.Value)
 	case *ir.Int32Value:
@@ -998,26 +1029,39 @@ func (g *gen) value(pos token.Position, id ir.TypeID, v ir.Value) {
 			case 0:
 				g.w("nil")
 			default:
-				TODO("%s: TODO958 %v:%v", pos, t, t.Kind())
+				g.w("(%v)(unsafe.Pointer(uintptr(%v)))", g.typ(t), uintptr(x.Value))
 			}
 		default:
 			g.w("%v", x.Value)
 		}
 	case *ir.Int64Value:
 		switch t.Kind() {
+		case ir.Pointer:
+			switch x.Value {
+			case 0:
+				g.w("nil")
+			default:
+				g.w("(%v)(unsafe.Pointer(uintptr(%v)))", g.typ(t), uintptr(x.Value))
+			}
+		case ir.Int32:
+			g.w("int32(%v)", int32(x.Value))
+		case ir.Uint32:
+			g.w("uint32(%v)", uint32(x.Value))
+		case ir.Int64:
+			g.w("int64(%v)", x.Value)
 		case ir.Uint64:
 			g.w("uint64(%v)", uint64(x.Value))
 		default:
-			TODO("%v", t.Kind())
+			TODO("%s: %v", pos, t.Kind())
 		}
 	case *ir.StringValue:
 		if x.Offset != 0 {
-			TODO("")
+			TODO("%s", pos)
 		}
 
 		g.w("str(%v)", g.string(x.StringID))
 	default:
-		TODO("%T", x)
+		TODO("%s: %T", pos, x)
 	}
 }
 
@@ -1074,6 +1118,9 @@ func (g *gen) gen() error {
 		default:
 			g.w("func preInc_%d(p *%[2]v, d %[2]v) %[2]v { v := *p + d; *p = v; return v }\n", v.TypeID, g.typ2(v.TypeID))
 		}
+	}
+	for _, v := range g.helpers(g.storebits) {
+		g.w("func storebits_%d(p *%[2]v, v, m %[2]v, o uint) %[2]v { *p = *p&m|(v<<o); return v }\n", v.TypeID, g.typ2(v.TypeID))
 	}
 	for _, v := range g.helpers(g.stores) {
 		g.w("func store_%d(p *%[2]v, v %[2]v) %[2]v { *p = v; return v }\n", v.TypeID, g.typ2(v.TypeID))
