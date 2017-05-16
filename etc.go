@@ -92,6 +92,23 @@ type xop int
 // Pos implements operation.
 func (xop) Pos() token.Position { return token.Position{} }
 
+func (x xop) String() string {
+	switch x {
+	case land:
+		return "land"
+	case lop:
+		return "lop"
+	case lor:
+		return "lor"
+	case nop:
+		return "nop"
+	case ternary:
+		return "ternary"
+	default:
+		return fmt.Sprintf("%T(%v)", x, int(x))
+	}
+}
+
 type expr struct {
 	Expr *exprNode
 	token.Position
@@ -104,6 +121,7 @@ func (e *expr) Pos() token.Position { return e.Position }
 
 type exprNode struct {
 	Childs exprList
+	Comma  *exprNode
 	Op     operation
 	Parent *exprNode
 	ir.TypeID
@@ -119,12 +137,23 @@ func (e *exprNode) tree() string {
 type exprList []*exprNode
 
 func (p *exprList) operand(op operation, t ir.TypeID) { p.push(&exprNode{Op: op, TypeID: t}) }
-func (p *exprList) push(e *exprNode)                  { *p = append(*p, e) }
 func (p *exprList) unop(op operation, t ir.TypeID)    { p.op(op, t, exprList{p.pop()}) }
 func (p exprList) String() string                     { return pretty(p) }
 
 func (p *exprList) op(op operation, t ir.TypeID, childs exprList) {
 	p.push(&exprNode{Op: op, TypeID: t, Childs: childs})
+}
+
+func (p *exprList) push(e *exprNode) {
+	a := *p
+	var c *exprNode
+	if n := len(a); n > 0 {
+		if x, ok := a[n-1].Op.(*ir.Drop); ok && x.Comma {
+			c = p.pop()
+		}
+	}
+	e.Comma = c
+	*p = append(*p, e)
 }
 
 func (p *exprList) binop(op operation, t ir.TypeID) {
@@ -336,7 +365,7 @@ Non empty evaluation stack at IR code node boundary.
 		push 1				[1]
 		eval expr			[1 expr1]
 		convert to bool if necessary	[1 bool1]
-		lorOp1				[bool1]	// was jnz A
+		lop				[bool1]	// was jnz A
 		eval expr2			[bool1 expr2]
 		convert to bool if necessary	[bool1 bool2]
 		lor				[bool1||bool2]	// was jnz A
@@ -368,6 +397,14 @@ Non empty evaluation stack at IR code node boundary.
 		0: eval expr2			[expr2]
 		.... node boundary .............
 		1:				[exprList/expr2]
+		---- transformation -------------------------------------------
+		eval expr			[expr1]
+		convert to bool if necessary	[bool1]
+		nop				[bool1]
+		eval exprlist			[bool1 exprList]
+		nop				[bool1 exprList]
+		eval expr2			[bool1 exprList expr2]
+		ternary				[exprList/expr2]
 
 expr op= expr.
 
@@ -402,14 +439,14 @@ func (g *graph) computeStackStates(m map[*node]struct{}, n *node, s stack) {
 	}
 	for i := 0; i < len(n.Ops); i++ {
 		op := n.Ops[i]
-		// fmt.Printf("%#05x(%v) %v %v (pre)\n", i, len(n.Ops), op, s) //TODO-
+		//fmt.Printf("%#05x(%v) %v %v (pre)\n", i, len(n.Ops), op, s) //TODO-
 		switch x := op.(type) {
 		case *ir.Add:
 			s = s.pop().pop().pushT(x.TypeID)
+		case *ir.AllocResult:
+			// nop
 		case *ir.And:
 			s = s.pop().pop().pushT(x.TypeID)
-		case *ir.AllocResult:
-			s = s.pushT(x.TypeID)
 		case *ir.Argument:
 			s = s.pushT(g.qptrID(g.gen.f.t.Arguments[x.Index].ID(), x.Address))
 		case *ir.Bool:
@@ -418,9 +455,17 @@ func (g *graph) computeStackStates(m map[*node]struct{}, n *node, s stack) {
 			for i := 0; i < x.Arguments; i++ {
 				s = s.pop()
 			}
+			t := g.tc.MustType(x.TypeID).(*ir.FunctionType)
+			for _, v := range t.Results {
+				s = s.pushT(v.ID())
+			}
 		case *ir.CallFP:
 			for i := 0; i < x.Arguments+1; i++ {
 				s = s.pop()
+			}
+			t := g.tc.MustType(x.TypeID).(*ir.PointerType).Element.(*ir.FunctionType)
+			for _, v := range t.Results {
+				s = s.pushT(v.ID())
 			}
 		case *ir.Const32:
 			s = s.push(stackItem{TypeID: x.TypeID, Value: &ir.Int32Value{Value: x.Value}})
@@ -439,7 +484,7 @@ func (g *graph) computeStackStates(m map[*node]struct{}, n *node, s stack) {
 		case *ir.Drop:
 			s = s.pop()
 		case *ir.Dup:
-			s = s.push(s.tos())
+			s = s.pushT(x.TypeID)
 		case *ir.Element:
 			t := g.tc.MustType(x.TypeID).(*ir.PointerType).Element
 			s = s.pop().pop().pushT(g.qptrID(t.ID(), x.Address))
@@ -458,7 +503,6 @@ func (g *graph) computeStackStates(m map[*node]struct{}, n *node, s stack) {
 			}
 
 			n0 := label(n.Ops[:i+2][i+1].(*ir.Label))
-			var found bool
 			for j := i - 1; j >= 0; j-- {
 				if x, ok := n.Ops[j].(*ir.Jz); ok {
 					nn := int(x.NameID)
@@ -467,13 +511,9 @@ func (g *graph) computeStackStates(m map[*node]struct{}, n *node, s stack) {
 					}
 					if nn == n0 {
 						n.Ops[j] = nop
-						found = true
 						break
 					}
 				}
-			}
-			if !found {
-				panic("internal error")
 			}
 			n.Ops[i] = nop
 			n.append(g.label2codeNode[n0])
@@ -757,9 +797,9 @@ func (g *graph) processExpressions(m map[*node]struct{}, n *node) {
 	for i := 0; i < len(n.Ops); {
 		switch x := n.Ops[i].(type) {
 		case
-			*ir.AllocResult,
 			*ir.Argument,
 			*ir.Call,
+			*ir.CallFP,
 			*ir.Const32,
 			*ir.Const64,
 			*ir.Global,
@@ -774,6 +814,7 @@ func (g *graph) processExpressions(m map[*node]struct{}, n *node) {
 			}
 			i += nodes
 		case
+			*ir.AllocResult,
 			*ir.Arguments,
 			*ir.BeginScope,
 			*ir.EndScope,

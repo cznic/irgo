@@ -76,6 +76,7 @@ func newFn(tc ir.TypeCache, f *ir.FunctionDefinition) *fn {
 
 type gen struct {
 	builtins  map[int]string // Object#: qualifier.
+	commas    map[ir.TypeID]struct{}
 	copies    map[ir.TypeID]struct{}
 	f         *fn
 	mangled   map[cname]ir.NameID
@@ -100,6 +101,7 @@ func newGen(obj []ir.Object, qualifier func(*ir.FunctionDefinition) string) *gen
 
 	return &gen{
 		builtins:  map[int]string{},
+		commas:    map[ir.TypeID]struct{}{},
 		copies:    map[ir.TypeID]struct{}{},
 		mangled:   map[cname]ir.NameID{},
 		model:     model,
@@ -401,6 +403,13 @@ func (g *gen) expression(n *exprNode) {
 	p := n.Parent
 	for _, v := range n.Childs {
 		v.Parent = n
+	}
+	if n.Comma != nil {
+		g.commas[n.TypeID] = struct{}{}
+		g.w("comma_%d(", n.TypeID)
+		g.expression(n.Comma.Childs[0])
+		g.w(", ")
+		defer g.w(")")
 	}
 	switch x := n.Op.(type) {
 	case *ir.Argument:
@@ -1099,6 +1108,9 @@ func (g *gen) gen() error {
 		}
 	}
 	g.w("func bool2int(b bool) int32 { if b { return 1}; return 0 }\n")
+	for _, v := range g.helpers(g.commas) {
+		g.w("func comma_%d(_ interface{}, v %[1]v) %[1]v { return v }\n", v.TypeID, g.typ2(v.TypeID))
+	}
 	for _, v := range g.helpers(g.copies) {
 		g.w("func copy_%d(d, s *%[2]v) *%[2]v { *d = *s; return d }\n", v.TypeID, g.typ2(v.TypeID))
 	}
