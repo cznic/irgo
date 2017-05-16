@@ -373,21 +373,6 @@ func (g *gen) bool(n *exprNode) {
 	g.w("!= 0)")
 }
 
-func (g *gen) logop(n *exprNode) {
-	g.w("bool2int(")
-	g.bool(n.Childs[0])
-	switch n.Op {
-	case land:
-		g.w("&&")
-	case lor:
-		g.w("||")
-	default:
-		TODO("%v", n.Op)
-	}
-	g.bool(n.Childs[1])
-	g.w(")")
-}
-
 func (g *gen) expression(n *exprNode) {
 	switch n.Op.(type) {
 	case
@@ -647,6 +632,31 @@ func (g *gen) expression(n *exprNode) {
 			g.w("_%v", x.Number)
 		}
 		g.w("}\n")
+	case *ir.Label:
+		if x.Cond {
+			g.w("func() %v { if ", n.TypeID)
+			g.expression(n.Childs[0])
+			g.w("!= 0 { return")
+			g.expression(n.Childs[1])
+			g.w("}; return")
+			g.expression(n.Childs[2])
+			g.w("}()")
+			return
+		}
+
+		g.w("bool2int(")
+		g.expression(n.Childs[0])
+		g.w("!= 0")
+		switch {
+		case x.LAnd:
+			g.w("&&")
+		case x.LOr:
+			g.w("||")
+		default:
+			panic("internal error")
+		}
+		g.expression(n.Childs[1])
+		g.w("!= 0)")
 	case *ir.Load:
 		g.w("*")
 		if _, ok := n.Childs[0].Op.(*ir.Dup); ok {
@@ -814,23 +824,6 @@ func (g *gen) expression(n *exprNode) {
 			g.w("&")
 		}
 		g.w("%v", g.mangle(nfo.def.NameID, false, sc))
-	case xop:
-		switch x {
-		case lop:
-			g.expression(n.Childs[1])
-		case land, lor:
-			g.logop(n)
-		case ternary:
-			g.w("func() %v { if ", n.TypeID)
-			g.expression(n.Childs[0])
-			g.w("!= 0 { return")
-			g.expression(n.Childs[1])
-			g.w("}; return")
-			g.expression(n.Childs[2])
-			g.w("}()")
-		default:
-			TODO("%T(%v)", x, x)
-		}
 	default:
 		//TODO("%s: %T\n%s", x.Pos(), x, n.tree())
 		TODO("%s: %T", x.Pos(), x)

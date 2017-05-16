@@ -15,18 +15,7 @@ import (
 	"github.com/cznic/strutil"
 )
 
-const (
-	_ xop = iota
-	land
-	lop
-	lor
-	nop
-	ternary
-)
-
 var (
-	_ operation = xop(0)
-
 	idComplex128 = ir.TypeID(dict.SID("complex128"))
 	idComplex64  = ir.TypeID(dict.SID("complex64"))
 	idFloat32    = ir.TypeID(dict.SID("float32"))
@@ -87,28 +76,6 @@ type operation interface {
 	Pos() token.Position
 }
 
-type xop int
-
-// Pos implements operation.
-func (xop) Pos() token.Position { return token.Position{} }
-
-func (x xop) String() string {
-	switch x {
-	case land:
-		return "land"
-	case lop:
-		return "lop"
-	case lor:
-		return "lor"
-	case nop:
-		return "nop"
-	case ternary:
-		return "ternary"
-	default:
-		return fmt.Sprintf("%T(%v)", x, int(x))
-	}
-}
-
 type expr struct {
 	Expr *exprNode
 	token.Position
@@ -162,13 +129,6 @@ func (p *exprList) binop(op operation, t ir.TypeID) {
 	p.op(op, t, exprList{a, b})
 }
 
-func (p *exprList) ternary(t ir.TypeID) {
-	c := p.pop()
-	b := p.pop()
-	a := p.pop()
-	p.op(ternary, t, exprList{a, b, c})
-}
-
 func (p *exprList) pop() *exprNode {
 	s := *p
 	r := s[len(s)-1]
@@ -204,19 +164,6 @@ func (n *node) removeEdge(dest *node) {
 			return
 		}
 	}
-}
-
-func (n *node) append(m *node) {
-	for _, v := range m.Out {
-		n.addEdge(v)
-	}
-	n.removeEdge(m)
-	if _, ok := m.Ops[0].(*ir.Label); ok {
-		m.Ops[0] = nop
-	}
-	n.Ops = n.Ops[:len(n.Ops)+len(m.Ops)]
-	n.Fallthrough = m.Fallthrough
-	m.valid = false
 }
 
 type graph struct {
@@ -260,15 +207,20 @@ func newGraph(gen *gen, ops []ir.Operation) (nodes []*node) {
 func splitPoints(ops []ir.Operation) sort.IntSlice {
 	a := sort.IntSlice{0}
 	for i, op := range ops {
-		switch op.(type) {
+		switch x := op.(type) {
+		case *ir.Jmp:
+			if !x.Cond {
+				a = append(a, i+1)
+			}
 		case
 			//TODO 	*ir.JmpP,
-			*ir.Jmp,
 			*ir.Return,
 			*ir.Switch:
 			a = append(a, i+1)
 		case *ir.Label:
-			a = append(a, i)
+			if !x.LOr && !x.LAnd && !x.Nop && !x.Cond {
+				a = append(a, i)
+			}
 		}
 	}
 	return a[:sortutil.Dedupe(a)]
@@ -277,7 +229,7 @@ func splitPoints(ops []ir.Operation) sort.IntSlice {
 func (g *graph) addEdges(nodes []*node) {
 	// Collect symbol table.
 	for _, v := range nodes {
-		if x, ok := v.Ops[0].(*ir.Label); ok {
+		if x, ok := v.Ops[0].(*ir.Label); ok && !x.LOr && !x.LAnd && !x.Nop && !x.Cond {
 			g.label2codeNode[label(x)] = v
 		}
 	}
@@ -288,18 +240,30 @@ func (g *graph) addEdges(nodes []*node) {
 		for _, op = range node.Ops {
 			switch x := op.(type) {
 			case *ir.Jmp:
+				if x.Cond {
+					break
+				}
+
 				n := int(x.NameID)
 				if n == 0 {
 					n = -x.Number
 				}
 				node.addEdge(g.label2codeNode[n])
 			case *ir.Jz:
+				if x.LOp {
+					break
+				}
+
 				n := int(x.NameID)
 				if n == 0 {
 					n = -x.Number
 				}
 				node.addEdge(g.label2codeNode[n])
 			case *ir.Jnz:
+				if x.LOp {
+					break
+				}
+
 				n := int(x.NameID)
 				if n == 0 {
 					n = -x.Number
@@ -468,7 +432,9 @@ func (g *graph) computeStackStates(m map[*node]struct{}, n *node, s stack) {
 				s = s.pushT(v.ID())
 			}
 		case *ir.Const32:
-			s = s.push(stackItem{TypeID: x.TypeID, Value: &ir.Int32Value{Value: x.Value}})
+			if !x.LOp {
+				s = s.push(stackItem{TypeID: x.TypeID, Value: &ir.Int32Value{Value: x.Value}})
+			}
 		case *ir.Const64:
 			s = s.push(stackItem{TypeID: x.TypeID, Value: &ir.Int64Value{Value: x.Value}})
 		case *ir.Convert:
@@ -482,7 +448,9 @@ func (g *graph) computeStackStates(m map[*node]struct{}, n *node, s stack) {
 		case *ir.Div:
 			s = s.pop().pop().pushT(x.TypeID)
 		case *ir.Drop:
-			s = s.pop()
+			if !x.LOp {
+				s = s.pop()
+			}
 		case *ir.Dup:
 			s = s.pushT(x.TypeID)
 		case *ir.Element:
@@ -498,95 +466,14 @@ func (g *graph) computeStackStates(m map[*node]struct{}, n *node, s stack) {
 		case *ir.Global:
 			s = s.pushT(g.qptrID(g.obj[x.Index].Base().TypeID, x.Address))
 		case *ir.Jmp:
-			if len(s) == 0 {
-				break
-			}
-
-			n0 := label(n.Ops[:i+2][i+1].(*ir.Label))
-			for j := i - 1; j >= 0; j-- {
-				if x, ok := n.Ops[j].(*ir.Jz); ok {
-					nn := int(x.NameID)
-					if nn == 0 {
-						nn = -x.Number
-					}
-					if nn == n0 {
-						n.Ops[j] = nop
-						break
-					}
-				}
-			}
-			n.Ops[i] = nop
-			n.append(g.label2codeNode[n0])
-			n1 := int(x.NameID)
-			if n1 == 0 {
-				n1 = -x.Number
-			}
-			join := g.label2codeNode[n1]
-			join.Ops[0] = ternary
-			n.append(join)
+			// nop
 		case *ir.Jnz:
-			s = s.pop()
-			nn := int(x.NameID)
-			if nn == 0 {
-				nn = -x.Number
-			}
-			switch g.lor[nn] {
-			case 0:
-				if len(s) != 0 {
-					switch x := s[len(s)-1].Value.(type) {
-					case *ir.Int32Value:
-						if x.Value != 1 {
-							break
-						}
-
-						s = s.pop()
-						n.Ops[i] = lop
-						g.lor[nn]++
-					}
-				}
-			case 1:
-				s = s.pushT(idInt32)
-				g.lor[nn]++
-				n.Ops[i] = lor   // jnz A
-				n.Ops[i+1] = nop // drop
-				n.Ops[i+2] = nop // push 0
-				join := g.label2codeNode[nn]
-				n.append(join)
-				m[join] = struct{}{}
-			default:
-				TODO("%s: %#05x %v %v", x.Pos(), i, g.lor[nn], s)
+			if !x.LOp {
+				s = s.pop()
 			}
 		case *ir.Jz:
-			s = s.pop()
-			nn := int(x.NameID)
-			if nn == 0 {
-				nn = -x.Number
-			}
-			switch g.land[nn] {
-			case 0:
-				if len(s) != 0 {
-					switch x := s[len(s)-1].Value.(type) {
-					case *ir.Int32Value:
-						if x.Value != 0 {
-							break
-						}
-
-						s = s.pop()
-						n.Ops[i] = lop
-						g.land[nn]++
-					}
-				}
-			case 1:
-				s = s.pushT(idInt32)
-				g.land[nn]++
-				n.Ops[i] = land  // jz A
-				n.Ops[i+1] = nop // drop
-				n.Ops[i+2] = nop // push 1
-				join := g.label2codeNode[nn]
-				n.append(join)
-				m[join] = struct{}{}
-			default:
-				TODO("%s: %#05x %v %v", x.Pos(), i, g.land[nn], s)
+			if !x.LOp {
+				s = s.pop()
 			}
 		case
 			*ir.Eq,
@@ -646,24 +533,23 @@ func (g *graph) computeStackStates(m map[*node]struct{}, n *node, s stack) {
 			s = s.pushT(g.qptrID(nfo.def.TypeID, x.Address))
 		case *ir.Xor:
 			s = s.pop().pop().pushT(x.TypeID)
+		case *ir.Label:
+			switch {
+			case x.LOr || x.LAnd:
+				s = s.pop().pop().pushT(idInt32)
+			case x.Cond:
+				s = s.pop()
+				tos := s.tos()
+				s = s.pop().pop().pushT(tos.TypeID)
+			}
 		case
 			*ir.Arguments,
 			*ir.BeginScope,
 			*ir.EndScope,
-			*ir.Label,
 			*ir.Not,
 			*ir.Return,
 			*ir.VariableDeclaration:
 			// nop
-		case xop:
-			switch x {
-			case nop:
-				// nop
-			case ternary:
-				s = s.pop()
-			default:
-				TODO("%v", x)
-			}
 		default:
 			TODO("%s: %T", x.Pos(), x)
 		}
@@ -699,14 +585,23 @@ func (g *graph) processExpressionList(ops []operation, stacks []stack) (l exprLi
 			tos := l.pop()
 			l.push(tos)
 			l.push(tos)
+		case *ir.Jnz:
+			if !x.LOp {
+				l.unop(x, t)
+			}
+		case *ir.Jz:
+			if !x.LOp {
+				l.unop(x, t)
+			}
+		case *ir.Drop:
+			if !x.LOp {
+				l.unop(x, t)
+			}
 		case
 			*ir.Bool,
 			*ir.Convert,
 			*ir.Cpl,
-			*ir.Drop,
 			*ir.Field,
-			*ir.Jnz,
-			*ir.Jz,
 			*ir.Load,
 			*ir.Neg,
 			*ir.Not,
@@ -715,6 +610,16 @@ func (g *graph) processExpressionList(ops []operation, stacks []stack) (l exprLi
 			*ir.Switch:
 
 			l.unop(x, t)
+		case *ir.Label:
+			switch {
+			case x.LAnd || x.LOr:
+				l.binop(x, t)
+			case x.Cond:
+				c := l.pop()
+				b := l.pop()
+				a := l.pop()
+				l.op(x, b.TypeID, exprList{a, b, c})
+			}
 		case
 			*ir.Add,
 			*ir.And,
@@ -738,10 +643,13 @@ func (g *graph) processExpressionList(ops []operation, stacks []stack) (l exprLi
 			*ir.Xor:
 
 			l.binop(x, t)
+		case *ir.Const32:
+			if !x.LOp {
+				l.operand(x, t)
+			}
 		case
 			*ir.Argument,
 			*ir.Const,
-			*ir.Const32,
 			*ir.Const64,
 			*ir.Global,
 			*ir.Nil,
@@ -750,9 +658,12 @@ func (g *graph) processExpressionList(ops []operation, stacks []stack) (l exprLi
 			*ir.Variable:
 
 			l.operand(x, t)
+		case *ir.Jmp:
+			if !x.Cond {
+				return l, i
+			}
 		case
 			*ir.EndScope,
-			*ir.Jmp,
 			*ir.Return,
 			*ir.VariableDeclaration:
 			return l, i
@@ -761,21 +672,6 @@ func (g *graph) processExpressionList(ops []operation, stacks []stack) (l exprLi
 			*ir.Arguments,
 			*ir.BeginScope:
 			// nop
-		case xop:
-			switch x {
-			case nop:
-				// nop
-			case
-				land,
-				lop,
-				lor:
-
-				l.binop(x, t)
-			case ternary:
-				l.ternary(t)
-			default:
-				TODO("%v", x)
-			}
 		default:
 			TODO("%s: %T", x.Pos(), x)
 		}
@@ -796,11 +692,22 @@ func (g *graph) processExpressions(m map[*node]struct{}, n *node) {
 	var out []operation
 	for i := 0; i < len(n.Ops); {
 		switch x := n.Ops[i].(type) {
+		case *ir.Const32:
+			if !x.LOp {
+				// Start of an expression or expression list.
+				l, nodes := g.processExpressionList(n.Ops[i:], n.Stacks[i:])
+				for _, v := range l {
+					out = append(out, newExpr(v, x.Pos()))
+				}
+				i += nodes
+				break
+			}
+
+			i++
 		case
 			*ir.Argument,
 			*ir.Call,
 			*ir.CallFP,
-			*ir.Const32,
 			*ir.Const64,
 			*ir.Global,
 			*ir.Nil,
@@ -813,13 +720,21 @@ func (g *graph) processExpressions(m map[*node]struct{}, n *node) {
 				out = append(out, newExpr(v, x.Pos()))
 			}
 			i += nodes
+		case *ir.Label:
+			if !x.LAnd && !x.LOr && !x.Cond && !x.Nop {
+				out = append(out, x)
+			}
+			i++
+		case *ir.Jmp:
+			if !x.Cond {
+				out = append(out, x)
+			}
+			i++
 		case
 			*ir.AllocResult,
 			*ir.Arguments,
 			*ir.BeginScope,
 			*ir.EndScope,
-			*ir.Jmp,
-			*ir.Label,
 			*ir.Return,
 			*ir.VariableDeclaration:
 
