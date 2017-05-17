@@ -292,10 +292,10 @@ func (g *gen) relop3(n *exprNode, p bool) {
 	switch {
 	case p:
 		g.w("uintptr(unsafe.Pointer(")
-		g.expression(n)
+		g.expression(n, false)
 		g.w("))")
 	default:
-		g.expression(n)
+		g.expression(n, false)
 	}
 }
 
@@ -328,7 +328,7 @@ func (g *gen) relop(n *exprNode) {
 }
 
 func (g *gen) binop(n *exprNode) {
-	g.expression(n.Childs[0])
+	g.expression(n.Childs[0], false)
 	switch x := n.Op.(type) {
 	case *ir.Add:
 		g.w("+")
@@ -349,11 +349,11 @@ func (g *gen) binop(n *exprNode) {
 	default:
 		TODO("%s: %T", n.Op.Pos(), x)
 	}
-	g.expression(n.Childs[1])
+	g.expression(n.Childs[1], false)
 }
 
 func (g *gen) shift(n *exprNode) {
-	g.expression(n.Childs[0])
+	g.expression(n.Childs[0], false)
 	switch x := n.Op.(type) {
 	case *ir.Lsh:
 		g.w("<<")
@@ -363,16 +363,16 @@ func (g *gen) shift(n *exprNode) {
 		TODO("%s: %T", n.Op.Pos(), x)
 	}
 	g.w("uint")
-	g.expression(n.Childs[1])
+	g.expression(n.Childs[1], false)
 }
 
 func (g *gen) bool(n *exprNode) {
 	g.w("(")
-	g.expression(n)
+	g.expression(n, false)
 	g.w("!= 0)")
 }
 
-func (g *gen) expression(n *exprNode) {
+func (g *gen) expression(n *exprNode, void bool) {
 	switch n.Op.(type) {
 	case
 		*ir.Jnz,
@@ -381,12 +381,19 @@ func (g *gen) expression(n *exprNode) {
 
 		// nop
 	default:
-		g.w("(")
-		defer g.w(")")
+		if !void {
+			g.w("(")
+			defer g.w(")")
+		}
 	}
 	p := n.Parent
 	for _, v := range n.Childs {
 		v.Parent = n
+	}
+
+	var t ir.Type
+	if id := n.TypeID; id != 0 {
+		t = g.tc.MustType(id)
 	}
 
 	var a []*exprNode
@@ -402,7 +409,7 @@ func (g *gen) expression(n *exprNode) {
 			v.Comma = nil
 		}
 		for i := len(a) - 1; i >= 0; i-- {
-			g.expression(a[i])
+			g.expression(a[i], true)
 			g.w(";")
 		}
 		g.w("return (")
@@ -417,7 +424,7 @@ func (g *gen) expression(n *exprNode) {
 		g.w("(%s)", g.mangle(g.f.f.Arguments[x.Index], false, -1))
 	case *ir.Bool:
 		g.w("bool2int(")
-		g.expression(n.Childs[0])
+		g.expression(n.Childs[0], false)
 		switch {
 		case g.tc.MustType(x.TypeID).Kind() == ir.Pointer:
 			g.w("!= nil")
@@ -441,31 +448,31 @@ func (g *gen) expression(n *exprNode) {
 			switch {
 			case ft.Variadic && i >= len(ft.Arguments) && at.Kind() == ir.Pointer:
 				g.w("unsafe.Pointer(")
-				g.expression(v)
+				g.expression(v, false)
 				g.w(")")
 			case pt != nil && pt.Kind() == ir.Pointer && pt.ID() != idVoidPtr && at.ID() == idVoidPtr:
 				g.w("(%v)(unsafe.Pointer(", g.typ(pt))
-				g.expression(v)
+				g.expression(v, false)
 				g.w("))")
 			default:
-				g.expression(v)
+				g.expression(v, false)
 			}
 			g.w(", ")
 		}
 		g.w(")")
 	case *ir.CallFP:
 		fp := n.Childs[0]
-		g.expression(fp)
+		g.expression(fp, false)
 		ft := g.tc.MustType(fp.TypeID).(*ir.PointerType).Element.(*ir.FunctionType)
 		g.w("(")
 		for i, v := range n.Childs[1:] {
 			switch {
 			case ft.Variadic && i >= len(ft.Arguments) && g.tc.MustType(v.TypeID).Kind() == ir.Pointer:
 				g.w("unsafe.Pointer(")
-				g.expression(v)
+				g.expression(v, false)
 				g.w(")")
 			default:
-				g.expression(v)
+				g.expression(v, false)
 			}
 			g.w(", ")
 		}
@@ -519,7 +526,7 @@ func (g *gen) expression(n *exprNode) {
 		}
 	case *ir.Convert:
 		if x, ok := n.Childs[0].Op.(*ir.Global); ok && x.NameID == idMain {
-			g.expression(n.Childs[0])
+			g.expression(n.Childs[0], false)
 			return
 		}
 
@@ -530,29 +537,49 @@ func (g *gen) expression(n *exprNode) {
 			switch {
 			case g.tc.MustType(n.Childs[0].TypeID).Kind() != ir.Pointer:
 				g.w("uintptr")
-				g.expression(n.Childs[0])
+				g.expression(n.Childs[0], false)
 			default:
-				g.expression(n.Childs[0])
+				g.expression(n.Childs[0], false)
 			}
 			g.w(")")
 		default:
-			g.expression(n.Childs[0])
+			g.expression(n.Childs[0], false)
 		}
 		g.w(")")
 	case *ir.Copy:
+		if void {
+			g.w("*")
+			g.expression(n.Childs[0], false)
+			g.w("= *")
+			g.expression(n.Childs[1], false)
+			return
+		}
+
 		g.copies[x.TypeID] = struct{}{}
 		g.w("copy_%d(", x.TypeID)
-		g.expression(n.Childs[0])
+		g.expression(n.Childs[0], false)
 		g.w(",")
-		g.expression(n.Childs[1])
+		g.expression(n.Childs[1], false)
 		g.w(")")
 	case *ir.Cpl:
 		g.w("^")
-		g.expression(n.Childs[0])
+		g.expression(n.Childs[0], false)
 	case *ir.Drop:
-		g.w("drop(")
-		g.expression(n.Childs[0])
-		g.w(")")
+		switch y := n.Childs[0]; y.Op.(type) {
+		case
+			*ir.Call,
+			*ir.Copy,
+			*ir.Label,
+			*ir.PostIncrement,
+			*ir.PreIncrement,
+			*ir.Store:
+
+			g.expression(y, true)
+		default:
+			g.w("drop(")
+			g.expression(n.Childs[0], false)
+			g.w(")")
+		}
 	case *ir.Element:
 		t := g.tc.MustType(n.Childs[0].TypeID).(*ir.PointerType).Element
 		et := t
@@ -564,13 +591,13 @@ func (g *gen) expression(n *exprNode) {
 			g.w("*")
 		}
 		g.w("(*%v)(unsafe.Pointer(uintptr(unsafe.Pointer", g.typ(et))
-		g.expression(n.Childs[0])
+		g.expression(n.Childs[0], false)
 		s := "+"
 		if x.Neg {
 			s = "-"
 		}
 		g.w(")%s%v*uintptr", s, sz)
-		g.expression(n.Childs[1])
+		g.expression(n.Childs[1], false)
 		g.w("))")
 	case *ir.Field:
 		switch t := g.tc.MustType(n.Childs[0].TypeID).(*ir.PointerType).Element; t.Kind() {
@@ -579,14 +606,14 @@ func (g *gen) expression(n *exprNode) {
 				g.w("*")
 			}
 			g.w("(*%v)(unsafe.Pointer", g.typ(t.(*ir.StructOrUnionType).Fields[x.Index]))
-			g.expression(n.Childs[0])
+			g.expression(n.Childs[0], false)
 			g.w(")")
 		default:
 			if x.Address {
 				g.w("&")
 			}
 			g.w("(")
-			g.expression(n.Childs[0])
+			g.expression(n.Childs[0], false)
 			g.w(".X%v)", x.Index)
 		}
 	case *ir.Global:
@@ -624,7 +651,7 @@ func (g *gen) expression(n *exprNode) {
 		g.w("%s", nm)
 	case *ir.Jnz:
 		g.w("if")
-		g.expression(n.Childs[0])
+		g.expression(n.Childs[0], false)
 		g.w("!= 0 { goto ")
 		switch {
 		case x.NameID != 0:
@@ -635,7 +662,7 @@ func (g *gen) expression(n *exprNode) {
 		g.w("}\n")
 	case *ir.Jz:
 		g.w("if")
-		g.expression(n.Childs[0])
+		g.expression(n.Childs[0], false)
 		g.w("== 0 { goto ")
 		switch {
 		case x.NameID != 0:
@@ -647,17 +674,17 @@ func (g *gen) expression(n *exprNode) {
 	case *ir.Label:
 		if x.Cond {
 			g.w("func() %v { if ", g.typ2(n.TypeID))
-			g.expression(n.Childs[0])
+			g.expression(n.Childs[0], false)
 			g.w("!= 0 { return")
-			g.expression(n.Childs[1])
+			g.expression(n.Childs[1], false)
 			g.w("}; return")
-			g.expression(n.Childs[2])
+			g.expression(n.Childs[2], false)
 			g.w("}()")
 			return
 		}
 
 		g.w("bool2int(")
-		g.expression(n.Childs[0])
+		g.expression(n.Childs[0], false)
 		g.w("!= 0")
 		switch {
 		case x.LAnd:
@@ -667,7 +694,7 @@ func (g *gen) expression(n *exprNode) {
 		default:
 			panic("internal error")
 		}
-		g.expression(n.Childs[1])
+		g.expression(n.Childs[1], false)
 		g.w("!= 0)")
 	case *ir.Load:
 		g.w("*")
@@ -676,7 +703,7 @@ func (g *gen) expression(n *exprNode) {
 			return
 		}
 
-		g.expression(n.Childs[0])
+		g.expression(n.Childs[0], false)
 	case
 		*ir.Lsh,
 		*ir.Rsh:
@@ -706,19 +733,33 @@ func (g *gen) expression(n *exprNode) {
 		g.w("nil")
 	case *ir.Neg:
 		g.w("-")
-		g.expression(n.Childs[0])
+		g.expression(n.Childs[0], false)
 	case *ir.Not:
 		g.w("bool2int(")
-		g.expression(n.Childs[0])
+		g.expression(n.Childs[0], false)
 		g.w("== 0)")
 	case *ir.PostIncrement:
+		if void {
+			switch {
+			case t.Kind() == ir.Pointer:
+				g.w("*(*uintptr)(unsafe.Pointer")
+				g.expression(n.Childs[0], false)
+				g.w(") += uintptr(%v)", uintptr(x.Delta))
+			default:
+				g.w("*")
+				g.expression(n.Childs[0], false)
+				g.w("+= %v", x.Delta)
+			}
+			return
+		}
+
 		g.postIncs[x.TypeID] = struct{}{}
 		if x.Bits != 0 {
 			TODO("%s", x.Pos())
 		}
 
 		g.w("postInc_%d(", x.TypeID)
-		g.expression(n.Childs[0])
+		g.expression(n.Childs[0], false)
 		switch {
 		case g.tc.MustType(x.TypeID).Kind() == ir.Pointer:
 			g.w(", %v)", x.Delta)
@@ -726,13 +767,27 @@ func (g *gen) expression(n *exprNode) {
 			g.w(", %v(%v))", g.typ2(x.TypeID), x.Delta)
 		}
 	case *ir.PreIncrement:
+		if void {
+			switch {
+			case t.Kind() == ir.Pointer:
+				g.w("*(*uintptr)(unsafe.Pointer")
+				g.expression(n.Childs[0], false)
+				g.w(") += uintptr(%v)", uintptr(x.Delta))
+			default:
+				g.w("*")
+				g.expression(n.Childs[0], false)
+				g.w("+= %v", x.Delta)
+			}
+			return
+		}
+
 		g.preIncs[x.TypeID] = struct{}{}
 		if x.Bits != 0 {
 			TODO("%s", x.Pos())
 		}
 
 		g.w("preInc_%d(", x.TypeID)
-		g.expression(n.Childs[0])
+		g.expression(n.Childs[0], false)
 		switch {
 		case g.tc.MustType(x.TypeID).Kind() == ir.Pointer:
 			g.w(", %v)", x.Delta)
@@ -743,9 +798,9 @@ func (g *gen) expression(n *exprNode) {
 		sz := g.model.Sizeof(g.tc.MustType(x.PtrType).(*ir.PointerType).Element)
 		g.w("%v(((", x.TypeID)
 		g.w("uintptr(unsafe.Pointer")
-		g.expression(n.Childs[0])
+		g.expression(n.Childs[0], false)
 		g.w(")-uintptr(unsafe.Pointer")
-		g.expression(n.Childs[1])
+		g.expression(n.Childs[1], false)
 		g.w("))/%v)", sz)
 		g.w(")")
 	case *ir.Result:
@@ -764,10 +819,27 @@ func (g *gen) expression(n *exprNode) {
 				return
 			}
 
-			g.expression(n.Childs[0])
+			g.expression(n.Childs[0], false)
 			g.w(", (")
-			g.expression(n.Childs[1])
+			g.expression(n.Childs[1], false)
 			g.w("<<%v), %v, %v)", x.BitOffset, (uint64(1)<<uint(x.Bits)-1)<<uint(x.BitOffset), x.BitOffset)
+			return
+		}
+
+		if void {
+			if asop {
+				g.w("{ p := ")
+				g.expression(n.Childs[0].Childs[0], false)
+				g.w("; *p =")
+				g.expression(n.Childs[1], false)
+				g.w("}")
+				return
+			}
+
+			g.w("*")
+			g.expression(n.Childs[0], false)
+			g.w("=")
+			g.expression(n.Childs[1], false)
 			return
 		}
 
@@ -775,17 +847,17 @@ func (g *gen) expression(n *exprNode) {
 		g.w("store_%d(", x.TypeID)
 		if asop {
 			g.w("func()(*%[1]v, %[1]v){ p := ", g.typ2(x.TypeID))
-			g.expression(n.Childs[0].Childs[0])
+			g.expression(n.Childs[0].Childs[0], false)
 			g.w("; return p,")
-			g.expression(n.Childs[1])
+			g.expression(n.Childs[1], false)
 			g.w("}()")
 			g.w(")")
 			return
 		}
 
-		g.expression(n.Childs[0])
+		g.expression(n.Childs[0], false)
 		g.w(", ")
-		g.expression(n.Childs[1])
+		g.expression(n.Childs[1], false)
 		g.w(")")
 	case *ir.StringConst:
 		g.w("str(%v)", g.string(x.Value))
@@ -796,7 +868,7 @@ func (g *gen) expression(n *exprNode) {
 		}
 		sort.Sort(a)
 		g.w("switch")
-		g.expression(n.Childs[0])
+		g.expression(n.Childs[0], false)
 		g.w("{\n")
 		for _, v := range a {
 			g.w("case ")
@@ -846,7 +918,7 @@ func (g *gen) emit(n *node) {
 	for _, op := range n.Ops {
 		switch x := op.(type) {
 		case *expr:
-			g.expression(x.Expr)
+			g.expression(x.Expr, true)
 			g.w("\n")
 		case *ir.Return:
 			g.w("return\n")

@@ -4,8 +4,6 @@
 
 // +build !irgo.noopt
 
-//TODO bool expressions
-//TODO handle more drops
 //TODO goto label; label:
 //TODO _ = _var
 //TODO named(numbered) types
@@ -17,7 +15,6 @@ import (
 	"go/format"
 	"go/parser"
 	"go/token"
-	"strings"
 )
 
 type opt struct {
@@ -40,12 +37,111 @@ func (o *opt) pos(n ast.Node) token.Position {
 	return o.fset.Position(n.Pos())
 }
 
-func (o *opt) stmt(n *ast.Stmt) {
-	if *n == nil {
-		return
-	}
-
+func (o *opt) expr(n *ast.Expr) {
 	switch x := (*n).(type) {
+	case *ast.ArrayType:
+		// nop
+	case *ast.CallExpr:
+		o.expr(&x.Fun)
+		for i := range x.Args {
+			o.expr(&x.Args[i])
+			switch y := x.Args[i].(type) {
+			case *ast.ParenExpr:
+				x.Args[i] = y.X
+			}
+		}
+	case *ast.BasicLit:
+		// nop
+	case *ast.BinaryExpr:
+		o.expr(&x.X)
+		o.expr(&x.Y)
+		switch y := x.X.(type) {
+		case *ast.CallExpr:
+			switch z := y.Fun.(type) {
+			case *ast.Ident:
+				switch z.Name {
+				case "bool2int":
+					switch x.Op {
+					case token.EQL:
+						switch w := x.Y.(type) {
+						case *ast.BasicLit:
+							if w.Value == "0" {
+								*n = &ast.UnaryExpr{
+									Op: token.NOT,
+									X: &ast.ParenExpr{
+										X: y.Args[0],
+									},
+								}
+							}
+						}
+					case token.NEQ:
+						switch w := x.Y.(type) {
+						case *ast.BasicLit:
+							if w.Value == "0" {
+								*n = &ast.ParenExpr{
+									X: y.Args[0],
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	case *ast.CompositeLit:
+		for i := range x.Elts {
+			o.expr(&x.Elts[i])
+		}
+	case *ast.FuncLit:
+		o.blockStmt(x.Body)
+	case *ast.FuncType:
+		// nop
+	case *ast.Ident:
+		// nop
+	case *ast.IndexExpr:
+		o.expr(&x.X)
+		o.expr(&x.Index)
+	case *ast.KeyValueExpr:
+		o.expr(&x.Key)
+		o.expr(&x.Value)
+	case *ast.ParenExpr:
+		o.expr(&x.X)
+		switch y := x.X.(type) {
+		case
+			*ast.CallExpr,
+			*ast.Ident:
+			*n = y
+		case *ast.ParenExpr:
+			x.X = y.X
+		case *ast.UnaryExpr:
+			switch y.Op {
+			case token.AND:
+				*n = y
+			}
+		}
+	case *ast.SelectorExpr:
+		o.expr(&x.X)
+	case *ast.StarExpr:
+		o.expr(&x.X)
+		switch y := x.X.(type) {
+		case *ast.UnaryExpr:
+			switch y.Op {
+			case token.AND:
+				*n = y.X
+			}
+		}
+	case *ast.StructType:
+		// nop
+	case *ast.UnaryExpr:
+		o.expr(&x.X)
+	default:
+		TODO("%s: %T", o.pos(x), x)
+	}
+}
+
+func (o *opt) stmt(n *ast.Stmt) {
+	switch x := (*n).(type) {
+	case nil:
+		// nop
 	case *ast.AssignStmt:
 		for i := range x.Lhs {
 			o.expr(&x.Lhs[i])
@@ -53,8 +149,22 @@ func (o *opt) stmt(n *ast.Stmt) {
 		for i := range x.Rhs {
 			o.expr(&x.Rhs[i])
 		}
+		switch y := x.Lhs[0].(type) {
+		case *ast.ParenExpr:
+			if len(x.Lhs) == 1 {
+				x.Lhs[0] = y.X
+			}
+		}
+		switch y := x.Rhs[0].(type) {
+		case *ast.ParenExpr:
+			if len(x.Rhs) == 1 {
+				x.Rhs[0] = y.X
+			}
+		}
+	case *ast.BlockStmt:
+		o.blockStmt(x)
 	case *ast.BranchStmt:
-	// nop
+		// nop
 	case *ast.CaseClause:
 		for i := range x.List {
 			o.expr(&x.List[i])
@@ -64,49 +174,9 @@ func (o *opt) stmt(n *ast.Stmt) {
 		}
 	case *ast.DeclStmt:
 		o.decl(&x.Decl)
+	case *ast.EmptyStmt:
+		// nop
 	case *ast.ExprStmt:
-		switch y := x.X.(type) {
-		case *ast.CallExpr:
-			o.expr(&x.X)
-			switch z := y.Fun.(type) {
-			case *ast.Ident:
-				switch {
-				case z.Name == "drop":
-					if zz, ok := y.Args[0].(*ast.CallExpr); ok {
-						if zzz, ok := zz.Fun.(*ast.Ident); ok && strings.HasPrefix(zzz.Name, "store_") {
-							o.ver++
-							x.X = y.Args[0]
-						}
-					}
-				case strings.HasPrefix(z.Name, "store_"):
-					if len(y.Args) != 2 {
-						o.expr(&x.X)
-						return
-					}
-
-					var lhs ast.Expr
-					switch w := y.Args[0].(type) {
-					case *ast.CallExpr:
-						lhs = &ast.StarExpr{X: w}
-					case *ast.Ident:
-						lhs = &ast.StarExpr{X: w}
-					case *ast.UnaryExpr:
-						lhs = w.X
-					default:
-						return
-						//TODO TODO("%s: %T", o.pos(w), w)
-					}
-					o.ver++
-					*n = &ast.AssignStmt{
-						Lhs: []ast.Expr{lhs},
-						Tok: token.ASSIGN,
-						Rhs: []ast.Expr{y.Args[1]},
-					}
-					o.stmt(n)
-					return
-				}
-			}
-		}
 		o.expr(&x.X)
 	case *ast.IfStmt:
 		o.stmt(&x.Init)
@@ -131,79 +201,6 @@ func (o *opt) stmt(n *ast.Stmt) {
 func (o *opt) blockStmt(n *ast.BlockStmt) {
 	for i := range n.List {
 		o.stmt(&n.List[i])
-	}
-}
-
-func (o *opt) expr(n *ast.Expr) {
-	if *n == nil {
-		return
-	}
-
-	switch x := (*n).(type) {
-	case *ast.ArrayType:
-		o.expr(&x.Len)
-	case *ast.BasicLit:
-		// nop
-	case *ast.BinaryExpr:
-		o.expr(&x.X)
-		o.expr(&x.Y)
-	case *ast.CallExpr:
-		o.expr(&x.Fun)
-		for i := range x.Args {
-			switch y := x.Args[0].(type) {
-			case *ast.ParenExpr:
-				o.ver++
-				x.Args[i] = y.X
-				o.expr(&x.Args[i])
-			default:
-				o.expr(&x.Args[i])
-			}
-		}
-	case *ast.CompositeLit:
-		for i := range x.Elts {
-			o.expr(&x.Elts[i])
-		}
-	case *ast.FuncLit:
-		o.blockStmt(x.Body)
-	case *ast.FuncType:
-		// nop
-	case *ast.Ident:
-		// nop
-	case *ast.IndexExpr:
-		o.expr(&x.X)
-		o.expr(&x.Index)
-	case *ast.KeyValueExpr:
-		o.expr(&x.Key)
-		o.expr(&x.Value)
-	case *ast.ParenExpr:
-		switch y := x.X.(type) {
-		case *ast.CallExpr:
-			o.ver++
-			*n = y
-			o.expr(n)
-			return
-		case *ast.Ident:
-			o.ver++
-			*n = y
-			return
-		case *ast.UnaryExpr:
-			o.ver++
-			*n = y
-			o.expr(n)
-			return
-		}
-
-		o.expr(&x.X)
-	case *ast.SelectorExpr:
-		o.expr(&x.X)
-	case *ast.StarExpr:
-		o.expr(&x.X)
-	case *ast.StructType:
-		// nop
-	case *ast.UnaryExpr:
-		o.expr(&x.X)
-	default:
-		TODO("%s: %T", o.pos(x), x)
 	}
 }
 
@@ -244,15 +241,7 @@ func (o *opt) opt() error {
 		return err
 	}
 
-	ver := -1
-	for {
-		o.file(root)
-		if o.ver == ver {
-			break
-		}
-
-		ver = o.ver
-	}
+	o.file(root)
 	o.g.out.Reset()
 	return format.Node(o.g.out, o.fset, root)
 }
