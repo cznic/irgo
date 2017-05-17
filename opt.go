@@ -2,6 +2,14 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build !irgo.noopt
+
+//TODO bool expressions
+//TODO handle more drops
+//TODO goto label; label:
+//TODO _ = _var
+//TODO named(numbered) types
+
 package irgo
 
 import (

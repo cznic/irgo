@@ -115,8 +115,19 @@ func (p *exprList) push(e *exprNode) {
 	a := *p
 	var c *exprNode
 	if n := len(a); n > 0 {
-		if x, ok := a[n-1].Op.(*ir.Drop); ok && x.Comma {
-			c = p.pop()
+		switch x := a[n-1].Op.(type) {
+		case *ir.Drop:
+			if x.Comma {
+				c = p.pop()
+			}
+		case *ir.Call:
+			if x.Comma {
+				c = p.pop()
+			}
+		case *ir.CallFP:
+			if x.Comma {
+				c = p.pop()
+			}
 		}
 	}
 	e.Comma = c
@@ -752,18 +763,20 @@ func (g *graph) processExpressions(m map[*node]struct{}, n *node) {
 }
 
 func varInfo(ops []ir.Operation) (nfo []varNfo) {
-	n := -1
+	seq := -1
+	var a []int
 	for _, op := range ops {
 		switch x := op.(type) {
 		case *ir.BeginScope:
-			n++
+			seq++
+			a = append(a, seq)
 		case *ir.EndScope:
-			n--
+			a = a[:len(a)-1]
 		case *ir.VariableDeclaration:
-			nfo = append(nfo, varNfo{x, n})
+			nfo = append(nfo, varNfo{x, a[len(a)-1]})
 		}
 	}
-	if n != -1 {
+	if len(a) != 0 {
 		panic("internal error")
 	}
 	return nfo

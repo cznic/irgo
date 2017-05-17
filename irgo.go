@@ -57,6 +57,7 @@ type typeNfo struct {
 type cname struct {
 	ir.NameID
 	exported bool
+	index    int
 }
 
 type fn struct {
@@ -76,7 +77,6 @@ func newFn(tc ir.TypeCache, f *ir.FunctionDefinition) *fn {
 
 type gen struct {
 	builtins  map[int]string // Object#: qualifier.
-	commas    map[ir.TypeID]struct{}
 	copies    map[ir.TypeID]struct{}
 	f         *fn
 	mangled   map[cname]ir.NameID
@@ -101,7 +101,6 @@ func newGen(obj []ir.Object, qualifier func(*ir.FunctionDefinition) string) *gen
 
 	return &gen{
 		builtins:  map[int]string{},
-		commas:    map[ir.TypeID]struct{}{},
 		copies:    map[ir.TypeID]struct{}{},
 		mangled:   map[cname]ir.NameID{},
 		model:     model,
@@ -118,7 +117,7 @@ func newGen(obj []ir.Object, qualifier func(*ir.FunctionDefinition) string) *gen
 }
 
 func (g *gen) mangle(nm ir.NameID, exported bool, index int) ir.NameID {
-	k := cname{nm, exported}
+	k := cname{nm, exported, index}
 	if x, ok := g.mangled[k]; ok {
 		return x
 	}
@@ -389,12 +388,25 @@ func (g *gen) expression(n *exprNode) {
 	for _, v := range n.Childs {
 		v.Parent = n
 	}
-	if n.Comma != nil {
-		g.commas[n.TypeID] = struct{}{}
-		g.w("comma_%d(", n.TypeID)
-		g.expression(n.Comma.Childs[0])
-		g.w(", ")
-		defer g.w(")")
+
+	var a []*exprNode
+	for c := n.Comma; c != nil; c = c.Comma {
+		a = append(a, c)
+	}
+	if len(a) != 0 {
+		if n.TypeID == 0 {
+			TODO("%s:\n%s", n.Op.Pos(), pretty(n))
+		}
+		g.w("func() %v {", g.typ2(n.TypeID))
+		for _, v := range a {
+			v.Comma = nil
+		}
+		for i := len(a) - 1; i >= 0; i-- {
+			g.expression(a[i])
+			g.w(";")
+		}
+		g.w("return (")
+		defer g.w(")}()")
 	}
 	switch x := n.Op.(type) {
 	case *ir.Argument:
@@ -634,7 +646,7 @@ func (g *gen) expression(n *exprNode) {
 		g.w("}\n")
 	case *ir.Label:
 		if x.Cond {
-			g.w("func() %v { if ", n.TypeID)
+			g.w("func() %v { if ", g.typ2(n.TypeID))
 			g.expression(n.Childs[0])
 			g.w("!= 0 { return")
 			g.expression(n.Childs[1])
@@ -907,6 +919,9 @@ func (g *gen) functionDefinition(oi int, f *ir.FunctionDefinition) {
 			}
 			g.w("%s,", g.typ(v))
 		}
+		if ft.Variadic {
+			g.w("args ...interface{}")
+		}
 		g.w(")")
 		if len(ft.Results) != 0 {
 			//TODO support multiple results.
@@ -920,7 +935,7 @@ func (g *gen) functionDefinition(oi int, f *ir.FunctionDefinition) {
 			sc = -1
 		}
 		nm := g.mangle(v.def.NameID, false, sc)
-		g.w("var %v %v\n", nm, g.typ2(v.def.TypeID))
+		g.w("var %v %v // %s\n", nm, g.typ2(v.def.TypeID), v.def.Pos())
 		g.w("_ = %v\n", nm)
 	}
 	nodes := newGraph(g, f.Body)
@@ -1075,8 +1090,16 @@ func (g *gen) dataDefinition(d *ir.DataDefinition) {
 	}
 
 	g.w("func init() {\n")
-	g.w("%s = ", nm)
-	g.value(d.Position, d.TypeID, d.Value)
+	t := g.tc.MustType(d.TypeID)
+	switch {
+	case t.Kind() == ir.Array && t.(*ir.ArrayType).Item.Kind() == ir.Int8:
+		g.w("crt.Xstrncpy(&%v[0],", nm) //TODO no way to get the qualifier - hardcoded.
+		g.value(d.Position, d.TypeID, d.Value)
+		g.w(", %v)", t.(*ir.ArrayType).Items)
+	default:
+		g.w("%s = ", nm)
+		g.value(d.Position, d.TypeID, d.Value)
+	}
 	g.w("\n}\n\n")
 }
 
@@ -1101,9 +1124,6 @@ func (g *gen) gen() error {
 		}
 	}
 	g.w("func bool2int(b bool) int32 { if b { return 1}; return 0 }\n")
-	for _, v := range g.helpers(g.commas) {
-		g.w("func comma_%d(_ interface{}, v %[1]v) %[1]v { return v }\n", v.TypeID, g.typ2(v.TypeID))
-	}
 	for _, v := range g.helpers(g.copies) {
 		g.w("func copy_%d(d, s *%[2]v) *%[2]v { *d = *s; return d }\n", v.TypeID, g.typ2(v.TypeID))
 	}
