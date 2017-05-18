@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//TODO vararg ap is incorrect
+
 // Package irgo translates intermediate representations to Go. (Work In Progress)
 package irgo
 
@@ -79,6 +81,7 @@ type gen struct {
 	builtins  map[int]string // Object#: qualifier.
 	copies    map[ir.TypeID]struct{}
 	f         *fn
+	labels    map[int]bool
 	mangled   map[cname]ir.NameID
 	model     ir.MemoryModel
 	obj       []ir.Object
@@ -288,41 +291,69 @@ func (g *gen) string(n ir.StringID) int {
 	return x
 }
 
-func (g *gen) relop3(n *exprNode, p bool) {
-	switch {
-	case p:
-		g.w("uintptr(unsafe.Pointer(")
-		g.expression(n, false)
-		g.w("))")
-	default:
-		g.expression(n, false)
-	}
-}
-
-func (g *gen) relop2(n *exprNode, op string, p bool) {
-	g.relop3(n.Childs[0], p)
-	g.w(op)
-	g.relop3(n.Childs[1], p)
+func (g *gen) pcmp(n *exprNode, op string) {
+	g.w("uintptr(unsafe.Pointer")
+	g.expression(n.Childs[0], false)
+	g.w(") %v uintptr(unsafe.Pointer", op)
+	g.expression(n.Childs[1], false)
+	g.w(")")
 }
 
 func (g *gen) relop(n *exprNode) {
 	g.w("bool2int(")
-	p := g.tc.MustType(n.Childs[0].TypeID).Kind() == ir.Pointer || g.tc.MustType(n.Childs[1].TypeID).Kind() == ir.Pointer
-	switch x := n.Op.(type) {
-	case *ir.Eq:
-		g.relop2(n, "==", p)
-	case *ir.Geq:
-		g.relop2(n, ">=", p)
-	case *ir.Gt:
-		g.relop2(n, ">", p)
-	case *ir.Leq:
-		g.relop2(n, "<=", p)
-	case *ir.Lt:
-		g.relop2(n, "<", p)
-	case *ir.Neq:
-		g.relop2(n, "!=", p)
+	t := g.tc.MustType(n.Childs[0].TypeID)
+	u := g.tc.MustType(n.Childs[1].TypeID)
+	switch {
+	case t.Kind() == ir.Pointer:
+		switch n.Op.(type) {
+		case *ir.Eq:
+			if t.ID() == u.ID() {
+				g.expression(n.Childs[0], false)
+				g.w("==")
+				g.expression(n.Childs[1], false)
+				break
+			}
+
+			g.pcmp(n, "==")
+		case *ir.Geq:
+			g.pcmp(n, ">=")
+		case *ir.Gt:
+			g.pcmp(n, ">")
+		case *ir.Leq:
+			g.pcmp(n, "<=")
+		case *ir.Lt:
+			g.pcmp(n, "<")
+		case *ir.Neq:
+			if t.ID() == u.ID() {
+				g.expression(n.Childs[0], false)
+				g.w("!=")
+				g.expression(n.Childs[1], false)
+				break
+			}
+
+			g.pcmp(n, "!=")
+		default:
+			panic("internal error")
+		}
 	default:
-		TODO("%s: %T", n.Op.Pos(), x)
+		g.expression(n.Childs[0], false)
+		switch n.Op.(type) {
+		case *ir.Eq:
+			g.w("==")
+		case *ir.Geq:
+			g.w(">=")
+		case *ir.Gt:
+			g.w(">")
+		case *ir.Leq:
+			g.w("<=")
+		case *ir.Lt:
+			g.w("<")
+		case *ir.Neq:
+			g.w("!=")
+		default:
+			panic("internal error")
+		}
+		g.expression(n.Childs[1], false)
 	}
 	g.w(")")
 }
@@ -370,6 +401,26 @@ func (g *gen) bool(n *exprNode) {
 	g.w("(")
 	g.expression(n, false)
 	g.w("!= 0)")
+}
+
+func (g *gen) unsafe(n *exprNode) {
+	t := g.tc.MustType(n.TypeID)
+	switch t.Kind() {
+	case ir.Pointer:
+		e := t.(*ir.PointerType).Element
+		switch e.Kind() {
+		case ir.Function:
+			g.w("unsafe.Pointer(&struct{f %v", g.typ(e))
+			g.w("}{")
+			g.expression(n, false)
+			g.w("})")
+		default:
+			g.w("unsafe.Pointer")
+			g.expression(n, false)
+		}
+	default:
+		TODO("%s: %s", n.Op.Pos(), t)
+	}
 }
 
 func (g *gen) expression(n *exprNode, void bool) {
@@ -447,9 +498,7 @@ func (g *gen) expression(n *exprNode, void bool) {
 			at := g.tc.MustType(v.TypeID)
 			switch {
 			case ft.Variadic && i >= len(ft.Arguments) && at.Kind() == ir.Pointer:
-				g.w("unsafe.Pointer(")
-				g.expression(v, false)
-				g.w(")")
+				g.unsafe(v)
 			case pt != nil && pt.Kind() == ir.Pointer && pt.ID() != idVoidPtr && at.ID() == idVoidPtr:
 				g.w("(%v)(unsafe.Pointer(", g.typ(pt))
 				g.expression(v, false)
@@ -596,7 +645,12 @@ func (g *gen) expression(n *exprNode, void bool) {
 		if x.Neg {
 			s = "-"
 		}
-		g.w(")%s%v*uintptr", s, sz)
+		switch {
+		case sz == 1:
+			g.w(")%suintptr", s)
+		default:
+			g.w(")%s%v*uintptr", s, sz)
+		}
 		g.expression(n.Childs[1], false)
 		g.w("))")
 	case *ir.Field:
@@ -812,17 +866,31 @@ func (g *gen) expression(n *exprNode, void bool) {
 	case *ir.Store:
 		_, asop := n.Childs[0].Op.(*ir.Dup)
 		if x.Bits != 0 {
+			m := (uint64(1)<<uint(x.Bits) - 1) << uint(x.BitOffset)
+			if void {
+				if asop {
+					TODO("%s", x.Pos())
+					return
+				}
+
+				TODO("%s", x.Pos())
+				return
+			}
+
 			g.storebits[x.TypeID] = struct{}{}
 			g.w("storebits_%d(", x.TypeID)
 			if asop {
-				TODO("%s", x.Pos())
+				g.expression(n.Childs[0].Childs[0], false)
+				g.w(", (")
+				g.expression(n.Childs[1], false)
+				g.w("<<%v), %v, %v)", x.BitOffset, m, x.BitOffset)
 				return
 			}
 
 			g.expression(n.Childs[0], false)
 			g.w(", (")
 			g.expression(n.Childs[1], false)
-			g.w("<<%v), %v, %v)", x.BitOffset, (uint64(1)<<uint(x.Bits)-1)<<uint(x.BitOffset), x.BitOffset)
+			g.w("<<%v), %v, %v)", x.BitOffset, m, x.BitOffset)
 			return
 		}
 
@@ -888,7 +956,7 @@ func (g *gen) expression(n *exprNode, void bool) {
 		default:
 			g.w("_%v\n", l.Number)
 		}
-		g.w("}")
+		g.w("}\n")
 	case *ir.Variable:
 		nfo := g.f.varNfo[x.Index]
 		sc := nfo.scope
@@ -921,7 +989,7 @@ func (g *gen) emit(n *node) {
 			g.expression(x.Expr, true)
 			g.w("\n")
 		case *ir.Return:
-			g.w("return\n")
+			g.w("return\n\n")
 		case *ir.VariableDeclaration:
 			if x.Value == nil {
 				break
@@ -944,12 +1012,16 @@ func (g *gen) emit(n *node) {
 			default:
 				g.w("_%v\n", x.Number)
 			}
+			g.w("\n")
 		case *ir.Label:
+			if !g.labels[label(x)] {
+				break
+			}
+
 			switch {
 			case x.NameID != 0:
 				g.w("_%v:\n", x.NameID)
 			default:
-				g.w("goto _%v\n", x.Number)
 				g.w("_%v:\n", x.Number)
 			}
 		case
@@ -960,6 +1032,54 @@ func (g *gen) emit(n *node) {
 			// nop
 		default:
 			TODO("%s: %T", x.Pos(), x)
+		}
+	}
+}
+
+func (g *gen) collectLabels(nodes []*node) {
+	g.labels = map[int]bool{}
+	for _, v := range nodes {
+		for _, op := range v.Ops {
+			switch x := op.(type) {
+			case *expr:
+				switch y := x.Expr.Op.(type) {
+				case *ir.Jnz:
+					n := int(y.NameID)
+					if n == 0 {
+						n = -y.Number
+					}
+					g.labels[n] = true
+				case *ir.Jz:
+					n := int(y.NameID)
+					if n == 0 {
+						n = -y.Number
+					}
+					g.labels[n] = true
+				case *ir.Switch:
+					for _, v := range y.Labels {
+						n := int(v.NameID)
+						if n == 0 {
+							n = -v.Number
+						}
+						g.labels[n] = true
+					}
+					n := int(y.Default.NameID)
+					if n == 0 {
+						n = -y.Default.Number
+					}
+					g.labels[n] = true
+				}
+			case *ir.Jmp:
+				if x.Cond {
+					break
+				}
+
+				n := int(x.NameID)
+				if n == 0 {
+					n = -x.Number
+				}
+				g.labels[n] = true
+			}
 		}
 	}
 }
@@ -1011,6 +1131,7 @@ func (g *gen) functionDefinition(oi int, f *ir.FunctionDefinition) {
 		g.w("_ = %v\n", nm)
 	}
 	nodes := newGraph(g, f.Body)
+	g.collectLabels(nodes)
 	for _, v := range nodes {
 		g.emit(v)
 	}

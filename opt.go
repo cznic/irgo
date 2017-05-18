@@ -4,9 +4,12 @@
 
 // +build !irgo.noopt
 
-//TODO goto label; label:
 //TODO _ = _var
 //TODO named(numbered) types
+
+//TODO TCC 25_ index += 1
+
+//TODO TCC 46_ bool2int(a) != bool2int(b)
 
 package irgo
 
@@ -37,6 +40,49 @@ func (o *opt) pos(n ast.Node) token.Position {
 	return o.fset.Position(n.Pos())
 }
 
+func (o *opt) not(n ast.Expr) ast.Expr {
+	switch x := n.(type) {
+	case *ast.BinaryExpr:
+		switch x.Op {
+		case token.LEQ:
+			x.Op = token.GTR
+			return x
+		case token.GTR:
+			x.Op = token.LEQ
+			return x
+		case token.LSS:
+			x.Op = token.GEQ
+			return x
+		case token.GEQ:
+			x.Op = token.LSS
+			return x
+		case token.EQL:
+			x.Op = token.NEQ
+			return x
+		case token.NEQ:
+			x.Op = token.EQL
+			return x
+		case token.LOR:
+			x.X = o.not(x.X)
+			x.Op = token.LAND
+			x.Y = o.not(x.Y)
+			return x
+		case token.LAND:
+			x.X = o.not(x.X)
+			x.Op = token.LOR
+			x.Y = o.not(x.Y)
+			return x
+		default:
+			TODO("%s: %v", o.pos(n), x.Op)
+		}
+	case *ast.ParenExpr:
+		return o.not(x.X)
+	default:
+		TODO("%s: %T", o.pos(n), x)
+	}
+	panic("internal error")
+}
+
 func (o *opt) expr(n *ast.Expr) {
 	switch x := (*n).(type) {
 	case *ast.ArrayType:
@@ -48,6 +94,23 @@ func (o *opt) expr(n *ast.Expr) {
 			switch y := x.Args[i].(type) {
 			case *ast.ParenExpr:
 				x.Args[i] = y.X
+			}
+		}
+		switch y := x.Fun.(type) {
+		case *ast.Ident:
+			switch y.Name {
+			case "float64":
+				switch z := x.Args[0].(type) {
+				case *ast.BasicLit:
+					*n = z
+				case *ast.UnaryExpr:
+					if z.Op == token.SUB {
+						switch z.X.(type) {
+						case *ast.BasicLit:
+							*n = z
+						}
+					}
+				}
 			}
 		}
 	case *ast.BasicLit:
@@ -66,11 +129,8 @@ func (o *opt) expr(n *ast.Expr) {
 						switch w := x.Y.(type) {
 						case *ast.BasicLit:
 							if w.Value == "0" {
-								*n = &ast.UnaryExpr{
-									Op: token.NOT,
-									X: &ast.ParenExpr{
-										X: y.Args[0],
-									},
+								*n = &ast.ParenExpr{
+									X: o.not(y.Args[0]),
 								}
 							}
 						}
@@ -109,6 +169,7 @@ func (o *opt) expr(n *ast.Expr) {
 		case
 			*ast.CallExpr,
 			*ast.Ident:
+
 			*n = y
 		case *ast.ParenExpr:
 			x.X = y.X
@@ -120,6 +181,12 @@ func (o *opt) expr(n *ast.Expr) {
 		}
 	case *ast.SelectorExpr:
 		o.expr(&x.X)
+		switch y := x.X.(type) {
+		case *ast.UnaryExpr:
+			if y.Op == token.AND {
+				x.X = y.X
+			}
+		}
 	case *ast.StarExpr:
 		o.expr(&x.X)
 		switch y := x.X.(type) {
@@ -169,9 +236,7 @@ func (o *opt) stmt(n *ast.Stmt) {
 		for i := range x.List {
 			o.expr(&x.List[i])
 		}
-		for i := range x.Body {
-			o.stmt(&x.Body[i])
-		}
+		o.body(x.Body)
 	case *ast.DeclStmt:
 		o.decl(&x.Decl)
 	case *ast.EmptyStmt:
@@ -188,6 +253,10 @@ func (o *opt) stmt(n *ast.Stmt) {
 	case *ast.ReturnStmt:
 		for i := range x.Results {
 			o.expr(&x.Results[i])
+			switch y := x.Results[i].(type) {
+			case *ast.ParenExpr:
+				x.Results[i] = y.X
+			}
 		}
 	case *ast.SwitchStmt:
 		o.stmt(&x.Init)
@@ -198,10 +267,14 @@ func (o *opt) stmt(n *ast.Stmt) {
 	}
 }
 
-func (o *opt) blockStmt(n *ast.BlockStmt) {
-	for i := range n.List {
-		o.stmt(&n.List[i])
+func (o *opt) body(l []ast.Stmt) {
+	for i := range l {
+		o.stmt(&l[i])
 	}
+}
+
+func (o *opt) blockStmt(n *ast.BlockStmt) {
+	o.body(n.List)
 }
 
 func (o *opt) spec(n *ast.Spec) {
