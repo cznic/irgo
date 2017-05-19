@@ -211,7 +211,7 @@ func (g *gen) typ0(buf *buffer.Bytes, t ir.Type) {
 		}
 		buf.WriteString("}")
 	case ir.Union:
-		buf.WriteString("struct{_ [0]struct{")
+		buf.WriteString("struct{X [0]struct{")
 		for i, v := range t.(*ir.StructOrUnionType).Fields {
 			fmt.Fprintf(buf, "X%v ", i)
 			g.typ0(buf, v)
@@ -956,19 +956,33 @@ func (g *gen) expression(n *exprNode, void bool) {
 			}
 
 			g.w("*")
-			g.expression(n.Childs[0], false)
-			g.w("=")
 			switch {
-			case isTransitiveVoidPtr(t) && !isTransitiveVoidPtr(u):
-				g.w("uintptr(unsafe.Pointer")
-				g.expression(n.Childs[1], false)
-				g.w(")")
-			case !isTransitiveVoidPtr(t) && isTransitiveVoidPtr(u):
-				g.w("(%v)(unsafe.Pointer", g.typ(t.(*ir.PointerType).Element))
-				g.expression(n.Childs[1], false)
-				g.w(")")
+			case isTransitiveVoidPtr(t):
+				switch {
+				case isTransitiveVoidPtr(u):
+					g.expression(n.Childs[0], false)
+					g.w("=")
+					g.expression(n.Childs[1], false)
+				default:
+					g.expression(n.Childs[0], false)
+					g.w("=")
+					g.w("uintptr(unsafe.Pointer")
+					g.expression(n.Childs[1], false)
+					g.w(")")
+				}
 			default:
-				g.expression(n.Childs[1], false)
+				switch {
+				case isTransitiveVoidPtr(u):
+					g.expression(n.Childs[0], false)
+					g.w("=")
+					g.w("(%v)(unsafe.Pointer", g.typ(t.(*ir.PointerType).Element))
+					g.expression(n.Childs[1], false)
+					g.w(")")
+				default:
+					g.expression(n.Childs[0], false)
+					g.w("=")
+					g.expression(n.Childs[1], false)
+				}
 			}
 			return
 		}

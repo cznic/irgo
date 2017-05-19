@@ -9,8 +9,6 @@
 
 //TODO TCC 25_ index += 1
 
-//TODO TCC 46_ bool2int(a) != bool2int(b)
-
 package irgo
 
 import (

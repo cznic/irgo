@@ -436,10 +436,12 @@ func (g *graph) computeStackStates(m map[*node]struct{}, n *node, s stack) {
 				s = s.pushT(v.ID())
 			}
 		case *ir.CallFP:
+			var tos stackItem
 			for i := 0; i < x.Arguments+1; i++ {
+				tos = s.tos()
 				s = s.pop()
 			}
-			t := g.tc.MustType(x.TypeID).(*ir.PointerType).Element.(*ir.FunctionType)
+			t := g.tc.MustType(tos.TypeID).(*ir.PointerType).Element.(*ir.FunctionType)
 			for _, v := range t.Results {
 				s = s.pushT(v.ID())
 			}
@@ -466,8 +468,20 @@ func (g *graph) computeStackStates(m map[*node]struct{}, n *node, s stack) {
 		case *ir.Dup:
 			s = s.pushT(x.TypeID)
 		case *ir.Element:
-			t := g.tc.MustType(x.TypeID).(*ir.PointerType).Element
-			s = s.pop().pop().pushT(g.qptrID(t.ID(), x.Address))
+			s = s.pop()    // index
+			tos := s.tos() // array
+			t := g.tc.MustType(tos.TypeID)
+			switch t.Kind() {
+			case ir.Pointer:
+				t = t.(*ir.PointerType).Element
+				switch t.Kind() {
+				case ir.Array:
+					t = t.(*ir.ArrayType).Item
+				}
+			default:
+				panic("internal error")
+			}
+			s = s.pop().pushT(g.qptrID(t.ID(), x.Address))
 		case *ir.Field:
 			t := g.tc.MustType(x.TypeID).(*ir.PointerType).Element.(*ir.StructOrUnionType)
 			ft := t.Fields[x.Index]
