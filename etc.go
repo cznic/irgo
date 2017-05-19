@@ -415,6 +415,7 @@ func (g *graph) computeStackStates(m map[*node]struct{}, n *node, s stack) {
 	for i := 0; i < len(n.Ops); i++ {
 		op := n.Ops[i]
 		//fmt.Printf("%#05x(%v) %v %v (pre)\n", i, len(n.Ops), op, s) //TODO-
+	outer:
 		switch x := op.(type) {
 		case *ir.Add:
 			s = s.pop().pop().pushT(x.TypeID)
@@ -475,7 +476,20 @@ func (g *graph) computeStackStates(m map[*node]struct{}, n *node, s stack) {
 			}
 			s = s.pop().pushT(ft.ID())
 		case *ir.Global:
-			s = s.pushT(g.qptrID(g.obj[x.Index].Base().TypeID, x.Address))
+			o := g.obj[x.Index]
+			t := g.tc.MustType(o.Base().TypeID)
+			switch y := o.(type) {
+			case *ir.DataDefinition:
+				switch z := y.Value.(type) {
+				case *ir.CompositeValue:
+					if t.Kind() == ir.Pointer {
+						id := ir.TypeID(dict.SID(fmt.Sprintf("*[%v]%v", len(z.Values), t.(*ir.PointerType).Element)))
+						s = s.pushT(g.qptrID(id, x.Address))
+						break outer
+					}
+				}
+			}
+			s = s.pushT(g.qptrID(t.ID(), x.Address))
 		case *ir.Jmp:
 			// nop
 		case *ir.Jnz:
@@ -849,4 +863,15 @@ func isZeroValue(v ir.Value) bool {
 		TODO("isZeroValue %T", x)
 	}
 	panic("internal error")
+}
+
+func isTransitiveVoidPtr(t ir.Type) bool {
+	for t.Kind() == ir.Pointer {
+		if t.ID() == idVoidPtr {
+			return true
+		}
+
+		t = t.(*ir.PointerType).Element
+	}
+	return false
 }

@@ -87,6 +87,91 @@ func (o *opt) expr(n *ast.Expr) {
 	switch x := (*n).(type) {
 	case *ast.ArrayType:
 		// nop
+	case *ast.BasicLit:
+		// nop
+	case *ast.BinaryExpr:
+		o.expr(&x.X)
+		o.expr(&x.Y)
+		switch y := x.X.(type) {
+		case *ast.CallExpr:
+			switch z := y.Fun.(type) {
+			case *ast.Ident:
+				switch z.Name {
+				case "bool2int":
+					switch x.Op {
+					case token.EQL:
+						switch w := x.Y.(type) {
+						case *ast.BasicLit:
+							if w.Value == "0" {
+								*n = &ast.ParenExpr{
+									X: o.not(y.Args[0]),
+								}
+							}
+						case *ast.CallExpr:
+							switch p := w.Fun.(type) {
+							case *ast.Ident:
+								switch p.Name {
+								case "bool2int":
+									x.X = &ast.ParenExpr{
+										X: y.Args[0],
+									}
+									x.Y = &ast.ParenExpr{
+										X: w.Args[0],
+									}
+								}
+							}
+						}
+					case token.NEQ:
+						switch w := x.Y.(type) {
+						case *ast.BasicLit:
+							if w.Value == "0" {
+								*n = &ast.ParenExpr{
+									X: y.Args[0],
+								}
+							}
+						case *ast.CallExpr:
+							switch p := w.Fun.(type) {
+							case *ast.Ident:
+								switch p.Name {
+								case "bool2int":
+									x.X = &ast.ParenExpr{
+										X: y.Args[0],
+									}
+									x.Y = &ast.ParenExpr{
+										X: w.Args[0],
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		switch x.Op {
+		case token.ADD, token.SUB:
+			switch y := x.Y.(type) {
+			case *ast.BasicLit:
+				if y.Value == "0" {
+					*n = x.X
+				}
+			}
+		case token.MUL:
+			switch y := x.Y.(type) {
+			case *ast.CallExpr:
+				switch z := y.Fun.(type) {
+				case *ast.Ident:
+					switch z.Name {
+					case "uintptr":
+						switch w := y.Args[0].(type) {
+						case *ast.BasicLit:
+							if w.Value == "0" {
+								*n = w
+							}
+						}
+					}
+				}
+			}
+		}
 	case *ast.CallExpr:
 		o.expr(&x.Fun)
 		for i := range x.Args {
@@ -112,34 +197,35 @@ func (o *opt) expr(n *ast.Expr) {
 					}
 				}
 			}
-		}
-	case *ast.BasicLit:
-		// nop
-	case *ast.BinaryExpr:
-		o.expr(&x.X)
-		o.expr(&x.Y)
-		switch y := x.X.(type) {
-		case *ast.CallExpr:
-			switch z := y.Fun.(type) {
+		case *ast.SelectorExpr:
+			switch z := y.X.(type) {
 			case *ast.Ident:
 				switch z.Name {
-				case "bool2int":
-					switch x.Op {
-					case token.EQL:
-						switch w := x.Y.(type) {
-						case *ast.BasicLit:
-							if w.Value == "0" {
-								*n = &ast.ParenExpr{
-									X: o.not(y.Args[0]),
-								}
-							}
-						}
-					case token.NEQ:
-						switch w := x.Y.(type) {
-						case *ast.BasicLit:
-							if w.Value == "0" {
-								*n = &ast.ParenExpr{
-									X: y.Args[0],
+				case "unsafe":
+					switch y.Sel.Name {
+					case "Pointer":
+						switch w := x.Args[0].(type) {
+						case *ast.CallExpr:
+							switch w2 := w.Fun.(type) {
+							case *ast.Ident:
+								switch w2.Name {
+								case "uintptr":
+									switch w3 := w.Args[0].(type) {
+									case *ast.CallExpr:
+										switch w4 := w3.Fun.(type) {
+										case *ast.SelectorExpr:
+											switch w5 := w4.X.(type) {
+											case *ast.Ident:
+												switch w5.Name {
+												case "unsafe":
+													switch w4.Sel.Name {
+													case "Pointer":
+														*n = w3
+													}
+												}
+											}
+										}
+									}
 								}
 							}
 						}
