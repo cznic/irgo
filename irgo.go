@@ -3,6 +3,7 @@
 // license that can be found in the LICENSE file.
 
 //TODO vararg ap is incorrect
+//TODO unitptr -> unsafe.Pointer
 
 // Package irgo translates intermediate representations to Go. (Work In Progress)
 package irgo
@@ -237,6 +238,9 @@ func (g *gen) typ0(buf *buffer.Bytes, t ir.Type) {
 			g.typ0(buf, v)
 			buf.WriteByte(',')
 		}
+		if ft.Variadic {
+			buf.WriteString("...interface{}")
+		}
 		buf.WriteByte(')')
 		switch len(ft.Results) {
 		case 0:
@@ -331,7 +335,7 @@ func (g *gen) relop(n *exprNode) {
 	case t.Kind() == ir.Pointer:
 		switch n.Op.(type) {
 		case *ir.Eq:
-			if t.ID() == u.ID() {
+			if t.ID() == u.ID() && t.(*ir.PointerType).Element.Kind() != ir.Function {
 				g.expression(n.Childs[0], false)
 				g.w("==")
 				g.expression(n.Childs[1], false)
@@ -348,7 +352,7 @@ func (g *gen) relop(n *exprNode) {
 		case *ir.Lt:
 			g.pcmp(n, "<")
 		case *ir.Neq:
-			if t.ID() == u.ID() {
+			if t.ID() == u.ID() && t.(*ir.PointerType).Element.Kind() != ir.Function {
 				g.expression(n.Childs[0], false)
 				g.w("!=")
 				g.expression(n.Childs[1], false)
@@ -476,13 +480,70 @@ func (g *gen) call(ft *ir.FunctionType, args []*exprNode) {
 			g.expression(v, false)
 			g.w("))")
 		case pt != nil && isTransitiveVoidPtr(pt) && at.Kind() == ir.Pointer && !isTransitiveVoidPtr(at):
-			g.w("uintptr(unsafe.Pointer")
-			g.expression(v, false)
-			g.w(")")
+			g.convert(v, pt.ID())
 		default:
 			g.expression(v, false)
 		}
 		g.w(", ")
+	}
+	g.w(")")
+}
+
+func (g *gen) convert(e *exprNode, tid ir.TypeID) {
+	if x, ok := e.Op.(*ir.Global); ok && x.NameID == idMain {
+		g.expression(e, false)
+		return
+	}
+
+	if e.TypeID == tid {
+		g.expression(e, false)
+		return
+	}
+
+	et := g.tc.MustType(e.TypeID)
+	t := g.tc.MustType(tid)
+	if t.Kind() == ir.Pointer {
+		et := t.(*ir.PointerType).Element
+		if et.Kind() == ir.Function {
+			switch y := e.Op.(type) {
+			case *ir.Const32:
+				if y.Value == 0 {
+					g.w("nil")
+					return
+				}
+
+				TODO("%s: %T", e.Op.Pos(), y)
+			default:
+				// *(*t)(unsafe.Pointer(&struct{f t0}{e}))
+				g.w("*(*%v)(unsafe.Pointer(&struct{f %v}{", g.typ(t), g.typ2(e.TypeID))
+				g.expression(e, false)
+				g.w("}))")
+				return
+			}
+		}
+	}
+
+	if et.Kind() == ir.Pointer && isIntegalType(tid) {
+		g.w("(%v)(uintptr(unsafe.Pointer", g.typ(t))
+		g.expression(e, false)
+		g.w("))")
+		return
+	}
+
+	g.w("(%v)(", g.typ2(tid))
+	switch {
+	case t.Kind() == ir.Pointer:
+		g.w("unsafe.Pointer(")
+		switch {
+		case g.tc.MustType(e.TypeID).Kind() != ir.Pointer:
+			g.w("uintptr")
+			g.expression(e, false)
+		default:
+			g.expression(e, false)
+		}
+		g.w(")")
+	default:
+		g.expression(e, false)
 	}
 	g.w(")")
 }
@@ -565,12 +626,7 @@ func (g *gen) expression(n *exprNode, void bool) {
 		if p != nil {
 			switch p.Op.(type) {
 			case *ir.Element:
-				switch ptrSize {
-				case 4:
-					g.w("%v", uint32(x.Value))
-				case 8:
-					g.w("%v", uint64(x.Value))
-				}
+				g.w("uptr(%v)", x.Value)
 				return
 			}
 		}
@@ -589,9 +645,17 @@ func (g *gen) expression(n *exprNode, void bool) {
 		case ir.Int32:
 			g.w("int32(%v) ", x.Value)
 		case ir.Uint32:
-			g.w("uint32(%v) ", uint32(x.Value))
+			g.w("u32(%v) ", uint32(x.Value))
 		case ir.Float32:
-			g.w("float32(%v) ", math.Float32frombits(uint32(x.Value)))
+			v := math.Float32frombits(uint32(x.Value))
+			switch w := float64(v); {
+			case math.IsInf(w, 0):
+				g.w("float32(inf)")
+			case math.IsInf(w, -1):
+				g.w("float32(-inf)")
+			default:
+				g.w("float32(%v) ", v)
+			}
 		default:
 			TODO("%s: %v", x.Pos(), x.TypeID)
 		}
@@ -600,7 +664,15 @@ func (g *gen) expression(n *exprNode, void bool) {
 		case idComplex64:
 			g.w("complex(float32(%v), 0) ", math.Float64frombits(uint64(x.Value)))
 		case idFloat64:
-			g.w("float64(%v) ", math.Float64frombits(uint64(x.Value)))
+			v := math.Float64frombits(uint64(x.Value))
+			switch {
+			case math.IsInf(v, 0):
+				g.w("inf")
+			case math.IsInf(v, -1):
+				g.w("-inf")
+			default:
+				g.w("float64(%v) ", v)
+			}
 		case idInt64:
 			g.w("int64(%v) ", x.Value)
 		case idUint64:
@@ -609,50 +681,7 @@ func (g *gen) expression(n *exprNode, void bool) {
 			TODO("%s: %v", x.Pos(), x.TypeID)
 		}
 	case *ir.Convert:
-		if x, ok := n.Childs[0].Op.(*ir.Global); ok && x.NameID == idMain {
-			g.expression(n.Childs[0], false)
-			return
-		}
-
-		e := n.Childs[0]
-		t := g.tc.MustType(x.Result)
-		if t.Kind() == ir.Pointer {
-			et := t.(*ir.PointerType).Element
-			if et.Kind() == ir.Function {
-				switch y := e.Op.(type) {
-				case *ir.Const32:
-					if y.Value == 0 {
-						g.w("nil")
-						return
-					}
-
-					TODO("%s: %T", e.Op.Pos(), y)
-				default:
-					// *(*t)(unsafe.Pointer(&struct{f t0}{e}))
-					g.w("*(*%v)(unsafe.Pointer(&struct{f %v}{", g.typ(t), g.typ2(x.TypeID))
-					g.expression(e, false)
-					g.w("}))")
-					return
-				}
-			}
-		}
-
-		g.w("(%v)(", g.typ2(x.Result))
-		switch {
-		case t.Kind() == ir.Pointer:
-			g.w("unsafe.Pointer(")
-			switch {
-			case g.tc.MustType(e.TypeID).Kind() != ir.Pointer:
-				g.w("uintptr")
-				g.expression(e, false)
-			default:
-				g.expression(e, false)
-			}
-			g.w(")")
-		default:
-			g.expression(e, false)
-		}
-		g.w(")")
+		g.convert(n.Childs[0], x.Result)
 	case *ir.Copy:
 		if void {
 			g.w("*")
@@ -697,7 +726,12 @@ func (g *gen) expression(n *exprNode, void bool) {
 		if !x.Address {
 			g.w("*")
 		}
-		g.w("(*%v)(unsafe.Pointer(uintptr(unsafe.Pointer", g.typ(et))
+		switch {
+		case et.ID() == idVoid:
+			g.w("(uintptr)(unsafe.Pointer(uintptr(unsafe.Pointer")
+		default:
+			g.w("(*%v)(unsafe.Pointer(uintptr(unsafe.Pointer", g.typ(et))
+		}
 		g.expression(n.Childs[0], false)
 		s := "+"
 		if x.Neg {
@@ -712,21 +746,28 @@ func (g *gen) expression(n *exprNode, void bool) {
 		g.expression(n.Childs[1], false)
 		g.w("))")
 	case *ir.Field:
-		switch t := g.tc.MustType(n.Childs[0].TypeID).(*ir.PointerType).Element; t.Kind() {
+		e := n.Childs[0]
+		t := g.tc.MustType(x.TypeID).(*ir.PointerType).Element
+		ft := t.(*ir.StructOrUnionType).Fields[x.Index]
+		switch t.Kind() {
 		case ir.Union:
 			if !x.Address {
 				g.w("*")
 			}
-			g.w("(*%v)(unsafe.Pointer", g.typ(t.(*ir.StructOrUnionType).Fields[x.Index]))
-			g.expression(n.Childs[0], false)
+			g.w("(*%v)(unsafe.Pointer", g.typ(ft))
+			g.convert(e, x.TypeID)
 			g.w(")")
 		default:
+			s := ""
 			if x.Address {
 				g.w("&")
+				if ft.Kind() == ir.Array {
+					s = "[0]"
+				}
 			}
 			g.w("(")
-			g.expression(n.Childs[0], false)
-			g.w(".X%v)", x.Index)
+			g.convert(e, x.TypeID)
+			g.w(".X%v%v)", x.Index, s)
 		}
 	case *ir.Global:
 		nm := g.mangle(x.NameID, x.Linkage == ir.ExternalLinkage, -1)
@@ -781,7 +822,8 @@ func (g *gen) expression(n *exprNode, void bool) {
 			g.w("!= 0 { return")
 			g.expression(n.Childs[1], false)
 			g.w("}; return")
-			g.expression(n.Childs[2], false)
+			//TODO g.expression(n.Childs[2], false)
+			g.convert(n.Childs[2], n.TypeID)
 			g.w("}()")
 			return
 		}
@@ -851,7 +893,12 @@ func (g *gen) expression(n *exprNode, void bool) {
 			default:
 				g.w("*")
 				g.expression(n.Childs[0], false)
-				g.w("+= %v", x.Delta)
+				switch {
+				case x.Delta < 0:
+					g.w("-= %v", -x.Delta)
+				default:
+					g.w("+= %v", x.Delta)
+				}
 			}
 			return
 		}
@@ -879,7 +926,12 @@ func (g *gen) expression(n *exprNode, void bool) {
 			default:
 				g.w("*")
 				g.expression(n.Childs[0], false)
-				g.w("+= %v", x.Delta)
+				switch {
+				case x.Delta < 0:
+					g.w("-= %v", -x.Delta)
+				default:
+					g.w("+= %v", x.Delta)
+				}
 			}
 			return
 		}
@@ -895,7 +947,27 @@ func (g *gen) expression(n *exprNode, void bool) {
 		case g.tc.MustType(x.TypeID).Kind() == ir.Pointer:
 			g.w(", %v)", x.Delta)
 		default:
-			g.w(", %v(%v))", g.typ2(x.TypeID), x.Delta)
+			switch x.TypeID {
+			case idInt8:
+				g.w(", %v)", int8(x.Delta))
+			case idUint8:
+				g.w(", byte(%v))", uint8(x.Delta))
+			case idInt16:
+				g.w(", %v)", int16(x.Delta))
+			case idUint16:
+				g.w(", uint16(%v))", uint16(x.Delta))
+			case idInt32:
+				g.w(", %v)", int32(x.Delta))
+			case idUint32:
+				g.w(", uint32(%v))", uint32(x.Delta))
+			case idInt64:
+				g.w(", %v)", int32(x.Delta))
+			case idUint64:
+				g.w(", uint64(%v))", uint32(x.Delta))
+			default:
+				TODO("%s: %v", x.Pos(), x.TypeID)
+			}
+			//TODO g.w(", %v(%v))", g.typ2(x.TypeID), x.Delta)
 		}
 	case *ir.PtrDiff:
 		sz := g.model.Sizeof(g.tc.MustType(x.PtrType).(*ir.PointerType).Element)
@@ -966,7 +1038,7 @@ func (g *gen) expression(n *exprNode, void bool) {
 				default:
 					g.expression(n.Childs[0], false)
 					g.w("=")
-					g.w("uintptr(unsafe.Pointer")
+					g.w("(%v)(unsafe.Pointer", g.typ(t.(*ir.PointerType).Element))
 					g.expression(n.Childs[1], false)
 					g.w(")")
 				}
@@ -981,7 +1053,7 @@ func (g *gen) expression(n *exprNode, void bool) {
 				default:
 					g.expression(n.Childs[0], false)
 					g.w("=")
-					g.expression(n.Childs[1], false)
+					g.convert(n.Childs[1], t.(*ir.PointerType).Element.ID())
 				}
 			}
 			return
@@ -999,7 +1071,7 @@ func (g *gen) expression(n *exprNode, void bool) {
 			return
 		}
 
-		g.expression(n.Childs[0], false)
+		g.convert(n.Childs[0], g.tc.MustType(x.TypeID).Pointer().ID())
 		g.w(", ")
 		switch {
 		case !isTransitiveVoidPtr(t) && isTransitiveVoidPtr(u):
@@ -1210,7 +1282,7 @@ func (g *gen) functionDefinition(oi int, f *ir.FunctionDefinition) {
 			sc = -1
 		}
 		nm := g.mangle(v.def.NameID, false, sc)
-		g.w("var %v %v // %s\n", nm, g.typ2(v.def.TypeID), v.def.Pos())
+		g.w("var %v %v // %s\n", nm, g.typ2(v.def.TypeID), g.pos(v.def.Pos()))
 		g.w("_ = %v\n", nm)
 	}
 	nodes := newGraph(g, f.Body)
@@ -1459,6 +1531,8 @@ func (g *gen) gen() error {
 		g.w("func copy_%d(d, s *%[2]v) *%[2]v { *d = *s; return d }\n", v.TypeID, g.typ2(v.TypeID))
 	}
 	g.w("func drop(interface{}) {}\n")
+	g.w("func u32(n uint32) uint32 { return uint32(n) }\n")
+	g.w("func uptr(n int) uintptr { return uintptr(n) }\n")
 	for _, v := range g.helpers(g.postIncs) {
 		switch {
 		case g.tc.MustType(v.TypeID).Kind() == ir.Pointer:
