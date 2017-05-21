@@ -880,17 +880,6 @@ func isZeroValue(v ir.Value) bool {
 	panic("internal error")
 }
 
-func isTransitiveVoidPtr(t ir.Type) bool {
-	for t.Kind() == ir.Pointer {
-		if t.ID() == idVoidPtr {
-			return true
-		}
-
-		t = t.(*ir.PointerType).Element
-	}
-	return false
-}
-
 func isIntegalType(t ir.TypeID) bool {
 	switch t {
 	case

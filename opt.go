@@ -13,6 +13,7 @@
 //TODO uintptr(int32(0)) -> uintptr(0) // sqlite3.c:52427
 //TODO unsafe.Pointer(uintptr(0)) -> nil // sqlite3.c:52427
 //TODO (*T)(nil) -> nil // sqlite3.c:52427
+//TODO (unsafe.Pointer)(unsafe.Pointer(e))
 
 package irgo
 

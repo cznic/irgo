@@ -222,7 +222,7 @@ func (g *gen) typ0(buf *buffer.Bytes, t ir.Type) {
 		buf.WriteString("}")
 	case ir.Pointer:
 		if t.ID() == idVoidPtr {
-			buf.WriteString("uintptr ")
+			buf.WriteString("unsafe.Pointer ")
 			return
 		}
 
@@ -336,6 +336,9 @@ func (g *gen) relop(n *exprNode) {
 		switch n.Op.(type) {
 		case *ir.Eq:
 			if t.ID() == u.ID() && t.(*ir.PointerType).Element.Kind() != ir.Function {
+				if t.ID() == idVoidPtr {
+					g.w("unsafe.Pointer")
+				}
 				g.expression(n.Childs[0], false)
 				g.w("==")
 				g.expression(n.Childs[1], false)
@@ -389,6 +392,9 @@ func (g *gen) relop(n *exprNode) {
 func (g *gen) binop(n *exprNode) {
 	t := g.tc.MustType(n.Childs[0].TypeID)
 	if t.Kind() == ir.Pointer {
+		if t2 := t.(*ir.PointerType).Element; t2.Kind() == ir.Array {
+			t = t2.(*ir.ArrayType).Item.Pointer()
+		}
 		g.w("(%v)(unsafe.Pointer(", g.typ(t))
 		g.w("uintptr(unsafe.Pointer")
 		g.expression(n.Childs[0], false)
@@ -451,7 +457,7 @@ func (g *gen) shift(n *exprNode) {
 func (g *gen) bool(n *exprNode) {
 	g.w("(")
 	g.expression(n, false)
-	g.w("!= 0)")
+	g.w("!= 0")
 }
 
 func (g *gen) call(ft *ir.FunctionType, args []*exprNode) {
@@ -475,11 +481,8 @@ func (g *gen) call(ft *ir.FunctionType, args []*exprNode) {
 				g.w("unsafe.Pointer")
 				g.expression(v, false)
 			}
-		case pt != nil && pt.Kind() == ir.Pointer && pt.ID() != idVoidPtr && isTransitiveVoidPtr(at):
-			g.w("(%v)(unsafe.Pointer(", g.typ(pt))
-			g.expression(v, false)
-			g.w("))")
-		case pt != nil && isTransitiveVoidPtr(pt) && at.Kind() == ir.Pointer && !isTransitiveVoidPtr(at):
+			_ = pt //TODO-
+		case pt != nil:
 			g.convert(v, pt.ID())
 		default:
 			g.expression(v, false)
@@ -603,7 +606,7 @@ func (g *gen) expression(n *exprNode, void bool) {
 		t := g.tc.MustType(n.Childs[0].TypeID)
 		g.expression(n.Childs[0], false)
 		switch {
-		case t.Kind() == ir.Pointer && t.ID() != idVoidPtr:
+		case t.Kind() == ir.Pointer:
 			g.w("!= nil")
 		default:
 			g.w("!= 0")
@@ -643,7 +646,7 @@ func (g *gen) expression(n *exprNode, void bool) {
 		case ir.Uint16:
 			g.w("uint16(%v) ", uint16(x.Value))
 		case ir.Int32:
-			g.w("int32(%v) ", x.Value)
+			g.w("i32(%v) ", x.Value)
 		case ir.Uint32:
 			g.w("u32(%v) ", uint32(x.Value))
 		case ir.Float32:
@@ -717,32 +720,21 @@ func (g *gen) expression(n *exprNode, void bool) {
 			g.w(")")
 		}
 	case *ir.Element:
-		t := g.tc.MustType(n.Childs[0].TypeID).(*ir.PointerType).Element
-		et := t
-		if t.Kind() == ir.Array {
-			et = t.(*ir.ArrayType).Item
+		t := g.tc.MustType(x.TypeID)
+		if a := g.tc.MustType(n.Childs[0].TypeID).(*ir.PointerType).Element; a.Kind() == ir.Array {
+			t = a.(*ir.ArrayType).Item.Pointer()
 		}
-		sz := g.model.Sizeof(et)
-		if !x.Address {
-			g.w("*")
-		}
-		switch {
-		case et.ID() == idVoid:
-			g.w("(uintptr)(unsafe.Pointer(uintptr(unsafe.Pointer")
-		default:
-			g.w("(*%v)(unsafe.Pointer(uintptr(unsafe.Pointer", g.typ(et))
-		}
-		g.expression(n.Childs[0], false)
 		s := "+"
 		if x.Neg {
 			s = "-"
 		}
-		switch {
-		case sz == 1:
-			g.w(")%suintptr", s)
-		default:
-			g.w(")%s%v*uintptr", s, sz)
+		sz := g.model.Sizeof(t.(*ir.PointerType).Element)
+		if !x.Address {
+			g.w("*")
 		}
+		g.w("(%v)(unsafe.Pointer(uintptr(unsafe.Pointer", g.typ(t))
+		g.expression(n.Childs[0], false)
+		g.w(")%s%v*uintptr", s, sz)
 		g.expression(n.Childs[1], false)
 		g.w("))")
 	case *ir.Field:
@@ -819,10 +811,16 @@ func (g *gen) expression(n *exprNode, void bool) {
 		if x.Cond {
 			g.w("func() %v { if ", g.typ2(n.TypeID))
 			g.expression(n.Childs[0], false)
-			g.w("!= 0 { return")
-			g.expression(n.Childs[1], false)
+			g.w("!= 0 { return ")
+			switch {
+			case n.TypeID == idVoidPtr:
+				g.w("unsafe.Pointer(")
+				g.expression(n.Childs[1], false)
+				g.w(")")
+			default:
+				g.expression(n.Childs[1], false)
+			}
 			g.w("}; return")
-			//TODO g.expression(n.Childs[2], false)
 			g.convert(n.Childs[2], n.TypeID)
 			g.w("}()")
 			return
@@ -909,7 +907,8 @@ func (g *gen) expression(n *exprNode, void bool) {
 		}
 
 		g.w("postInc_%d(", x.TypeID)
-		g.expression(n.Childs[0], false)
+		//TODO- g.expression(n.Childs[0], false)
+		g.convert(n.Childs[0], g.tc.MustType(x.TypeID).Pointer().ID())
 		switch {
 		case g.tc.MustType(x.TypeID).Kind() == ir.Pointer:
 			g.w(", %v)", x.Delta)
@@ -987,6 +986,9 @@ func (g *gen) expression(n *exprNode, void bool) {
 	case *ir.Store:
 		_, asop := n.Childs[0].Op.(*ir.Dup)
 		t := g.tc.MustType(n.Childs[0].TypeID)
+		if asop {
+			t = g.tc.MustType(n.Childs[0].Childs[0].TypeID)
+		}
 		u := g.tc.MustType(n.Childs[1].TypeID)
 		if x.Bits != 0 {
 			m := (uint64(1)<<uint(x.Bits) - 1) << uint(x.BitOffset)
@@ -1022,40 +1024,17 @@ func (g *gen) expression(n *exprNode, void bool) {
 				g.w("{ p := ")
 				g.expression(n.Childs[0].Childs[0], false)
 				g.w("; *p =")
-				g.expression(n.Childs[1], false)
+				g.convert(n.Childs[1], t.(*ir.PointerType).Element.ID())
 				g.w("}")
 				return
 			}
 
+			_ = t
+			_ = u
 			g.w("*")
-			switch {
-			case isTransitiveVoidPtr(t):
-				switch {
-				case isTransitiveVoidPtr(u):
-					g.expression(n.Childs[0], false)
-					g.w("=")
-					g.expression(n.Childs[1], false)
-				default:
-					g.expression(n.Childs[0], false)
-					g.w("=")
-					g.w("(%v)(unsafe.Pointer", g.typ(t.(*ir.PointerType).Element))
-					g.expression(n.Childs[1], false)
-					g.w(")")
-				}
-			default:
-				switch {
-				case isTransitiveVoidPtr(u):
-					g.expression(n.Childs[0], false)
-					g.w("=")
-					g.w("(%v)(unsafe.Pointer", g.typ(t.(*ir.PointerType).Element))
-					g.expression(n.Childs[1], false)
-					g.w(")")
-				default:
-					g.expression(n.Childs[0], false)
-					g.w("=")
-					g.convert(n.Childs[1], t.(*ir.PointerType).Element.ID())
-				}
-			}
+			g.expression(n.Childs[0], false)
+			g.w("=")
+			g.convert(n.Childs[1], t.(*ir.PointerType).Element.ID())
 			return
 		}
 
@@ -1073,14 +1052,7 @@ func (g *gen) expression(n *exprNode, void bool) {
 
 		g.convert(n.Childs[0], g.tc.MustType(x.TypeID).Pointer().ID())
 		g.w(", ")
-		switch {
-		case !isTransitiveVoidPtr(t) && isTransitiveVoidPtr(u):
-			g.w("(%v)(unsafe.Pointer", g.typ(t.(*ir.PointerType).Element))
-			g.expression(n.Childs[1], false)
-			g.w(")")
-		default:
-			g.expression(n.Childs[1], false)
-		}
+		g.convert(n.Childs[1], x.TypeID)
 		g.w(")")
 	case *ir.StringConst:
 		g.w("str(%v)", g.string(x.Value))
@@ -1324,7 +1296,7 @@ func (g *gen) value(pos token.Position, id ir.TypeID, v ir.Value) {
 		if x.Offset == 0 {
 			switch {
 			case id == idVoidPtr:
-				g.w("(uintptr(unsafe.Pointer(&%v)))", nm)
+				g.w("unsafe.Pointer(&%v)", nm)
 			case t.Kind() == ir.Pointer && t.(*ir.PointerType).Element.Kind() == ir.Function:
 				t = t.(*ir.PointerType).Element
 				ft := g.tc.MustType(g.fns[nm].TypeID)
@@ -1340,7 +1312,7 @@ func (g *gen) value(pos token.Position, id ir.TypeID, v ir.Value) {
 			break
 		}
 
-		g.w("(uintptr(unsafe.Pointer(&%v))+%v)", g.mangle(x.NameID, x.Linkage == ir.ExternalLinkage, -1), x.Offset)
+		g.w("(%v)(uintptr(unsafe.Pointer(&%v))+%v)", g.typ2(id), g.mangle(x.NameID, x.Linkage == ir.ExternalLinkage, -1), x.Offset)
 	case *ir.CompositeValue:
 		switch t := g.tc.MustType(id); t.Kind() {
 		case ir.Array:
@@ -1417,12 +1389,7 @@ func (g *gen) value(pos token.Position, id ir.TypeID, v ir.Value) {
 		case ir.Pointer:
 			switch x.Value {
 			case 0:
-				switch {
-				case t.ID() == idVoidPtr:
-					g.w("0")
-				default:
-					g.w("nil")
-				}
+				g.w("nil")
 			default:
 				g.w("(%v)(unsafe.Pointer(uintptr(%v)))", g.typ(t), uintptr(x.Value))
 			}
@@ -1531,7 +1498,8 @@ func (g *gen) gen() error {
 		g.w("func copy_%d(d, s *%[2]v) *%[2]v { *d = *s; return d }\n", v.TypeID, g.typ2(v.TypeID))
 	}
 	g.w("func drop(interface{}) {}\n")
-	g.w("func u32(n uint32) uint32 { return uint32(n) }\n")
+	g.w("func i32(n int32) int32 { return n }\n")
+	g.w("func u32(n uint32) uint32 { return n }\n")
 	g.w("func uptr(n int) uintptr { return uintptr(n) }\n")
 	for _, v := range g.helpers(g.postIncs) {
 		switch {
