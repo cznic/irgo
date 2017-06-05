@@ -34,7 +34,7 @@ edit:
 editor:
 	gofmt -l -s -w *.go
 	go test -i
-	go test github.com/cznic/ccgo -ndebug 2>&1 | tee log
+	go test 2>&1 | tee log
 	go build
 
 internalError:

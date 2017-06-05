@@ -4,16 +4,7 @@
 
 // +build !irgo.noopt
 
-//TODO _ = _var
-//TODO named(numbered) types
-
-//TODO TCC 25_ index += 1
-//TODO assert
-//TODO drop // sqlite3.c:52424
-//TODO uintptr(int32(0)) -> uintptr(0) // sqlite3.c:52427
-//TODO unsafe.Pointer(uintptr(0)) -> nil // sqlite3.c:52427
-//TODO (*T)(nil) -> nil // sqlite3.c:52427
-//TODO (unsafe.Pointer)(unsafe.Pointer(e))
+//TODO TCC 21_: crt.Xprintf(tls, str(20), unsafe.Pointer((*int8)(unsafe.Pointer(&_destarray))))
 
 package irgo
 
@@ -22,6 +13,7 @@ import (
 	"go/format"
 	"go/parser"
 	"go/token"
+	"strings"
 )
 
 type opt struct {
@@ -89,6 +81,8 @@ func (o *opt) not(n ast.Expr) ast.Expr {
 
 func (o *opt) expr(n *ast.Expr) {
 	switch x := (*n).(type) {
+	case nil:
+		// nop
 	case *ast.ArrayType:
 		// nop
 	case *ast.BasicLit:
@@ -151,31 +145,6 @@ func (o *opt) expr(n *ast.Expr) {
 				}
 			}
 		}
-		switch x.Op {
-		case token.ADD, token.SUB:
-			switch y := x.Y.(type) {
-			case *ast.BasicLit:
-				if y.Value == "0" {
-					*n = x.X
-				}
-			}
-		case token.MUL:
-			switch y := x.Y.(type) {
-			case *ast.CallExpr:
-				switch z := y.Fun.(type) {
-				case *ast.Ident:
-					switch z.Name {
-					case "uintptr":
-						switch w := y.Args[0].(type) {
-						case *ast.BasicLit:
-							if w.Value == "0" {
-								*n = w
-							}
-						}
-					}
-				}
-			}
-		}
 	case *ast.CallExpr:
 		o.expr(&x.Fun)
 		for i := range x.Args {
@@ -191,7 +160,9 @@ func (o *opt) expr(n *ast.Expr) {
 			case "float64":
 				switch z := x.Args[0].(type) {
 				case *ast.BasicLit:
-					*n = z
+					if strings.IndexByte(z.Value, '.') > 0 {
+						*n = z
+					}
 				case *ast.UnaryExpr:
 					if z.Op == token.SUB {
 						switch z.X.(type) {
@@ -201,32 +172,68 @@ func (o *opt) expr(n *ast.Expr) {
 					}
 				}
 			}
-		case *ast.SelectorExpr:
+			/*
+			  0: *ast.CallExpr {
+			  .  Fun: *ast.ParenExpr {
+			  .  .  Lparen: irgo.out:46:86
+			  .  .  X: *ast.SelectorExpr {
+			  .  .  .  X: *ast.Ident {
+			  .  .  .  .  NamePos: irgo.out:46:87
+			  .  .  .  .  Name: "unsafe"
+			  .  .  .  }
+			  .  .  .  Sel: *ast.Ident {
+			  .  .  .  .  NamePos: irgo.out:46:94
+			  .  .  .  .  Name: "Pointer"
+			  .  .  .  }
+			  .  .  }
+			  .  .  Rparen: irgo.out:46:102
+			  .  }
+			  .  Lparen: irgo.out:46:103
+			  .  Args: []ast.Expr (len = 1) {
+			  .  .  0: *ast.CallExpr {
+			  .  .  .  Fun: *ast.SelectorExpr {
+			  .  .  .  .  X: *ast.Ident {
+			  .  .  .  .  .  NamePos: irgo.out:46:104
+			  .  .  .  .  .  Name: "unsafe"
+			  .  .  .  .  }
+			  .  .  .  .  Sel: *ast.Ident {
+			  .  .  .  .  .  NamePos: irgo.out:46:111
+			  .  .  .  .  .  Name: "Pointer"
+			  .  .  .  .  }
+			  .  .  .  }
+			  .  .  .  Lparen: irgo.out:46:118
+			  .  .  .  Args: []ast.Expr (len = 1) {
+			  .  .  .  .  0: *ast.UnaryExpr {
+			  .  .  .  .  .  OpPos: irgo.out:46:120
+			  .  .  .  .  .  Op: &
+			  .  .  .  .  .  X: *ast.Ident {
+			  .  .  .  .  .  .  NamePos: irgo.out:46:121
+			  .  .  .  .  .  .  Name: "_jones"
+			  .  .  .  .  .  .  Obj: *(obj @ 464)
+			  .  .  .  .  .  }
+			  .  .  .  .  }
+			  .  .  .  }
+			*/
+		case *ast.ParenExpr:
 			switch z := y.X.(type) {
-			case *ast.Ident:
-				switch z.Name {
-				case "unsafe":
-					switch y.Sel.Name {
-					case "Pointer":
-						switch w := x.Args[0].(type) {
-						case *ast.CallExpr:
-							switch w2 := w.Fun.(type) {
-							case *ast.Ident:
-								switch w2.Name {
-								case "uintptr":
-									switch w3 := w.Args[0].(type) {
-									case *ast.CallExpr:
-										switch w4 := w3.Fun.(type) {
-										case *ast.SelectorExpr:
-											switch w5 := w4.X.(type) {
-											case *ast.Ident:
-												switch w5.Name {
-												case "unsafe":
-													switch w4.Sel.Name {
-													case "Pointer":
-														*n = w3
-													}
-												}
+			case *ast.SelectorExpr:
+				switch w := z.X.(type) {
+				case *ast.Ident:
+					switch w.Name {
+					case "unsafe":
+						switch z.Sel.Name {
+						case "Pointer":
+							switch w2 := x.Args[0].(type) {
+							case *ast.CallExpr:
+								switch w3 := w2.Fun.(type) {
+								case *ast.SelectorExpr:
+									switch w4 := w3.X.(type) {
+									case *ast.Ident:
+										switch w4.Name {
+										case "unsafe":
+											switch w3.Sel.Name {
+											case "Pointer":
+												x.Args[0] = w2.Args[0]
 											}
 										}
 									}
@@ -269,6 +276,7 @@ func (o *opt) expr(n *ast.Expr) {
 				*n = y
 			}
 		}
+
 	case *ast.SelectorExpr:
 		o.expr(&x.X)
 		switch y := x.X.(type) {
@@ -277,6 +285,11 @@ func (o *opt) expr(n *ast.Expr) {
 				x.X = y.X
 			}
 		}
+	case *ast.SliceExpr:
+		o.expr(&x.X)
+		o.expr(&x.Low)
+		o.expr(&x.High)
+		o.expr(&x.Max)
 	case *ast.StarExpr:
 		o.expr(&x.X)
 		switch y := x.X.(type) {
@@ -288,6 +301,8 @@ func (o *opt) expr(n *ast.Expr) {
 		}
 	case *ast.StructType:
 		// nop
+	case *ast.TypeAssertExpr:
+		o.expr(&x.X)
 	case *ast.UnaryExpr:
 		o.expr(&x.X)
 	default:
@@ -343,10 +358,6 @@ func (o *opt) stmt(n *ast.Stmt) {
 	case *ast.ReturnStmt:
 		for i := range x.Results {
 			o.expr(&x.Results[i])
-			switch y := x.Results[i].(type) {
-			case *ast.ParenExpr:
-				x.Results[i] = y.X
-			}
 		}
 	case *ast.SwitchStmt:
 		o.stmt(&x.Init)
@@ -369,6 +380,8 @@ func (o *opt) blockStmt(n *ast.BlockStmt) {
 
 func (o *opt) spec(n *ast.Spec) {
 	switch x := (*n).(type) {
+	case *ast.TypeSpec:
+		// nop
 	case *ast.ValueSpec:
 		for i := range x.Values {
 			o.expr(&x.Values[i])
@@ -405,6 +418,7 @@ func (o *opt) opt() error {
 	}
 
 	o.file(root)
+	// ast.Print(o.fset, root)
 	o.g.out.Reset()
 	return format.Node(o.g.out, o.fset, root)
 }

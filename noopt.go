@@ -28,7 +28,7 @@ func (o *opt) opt() error {
 	o.fset = token.NewFileSet()
 	root, err := parser.ParseFile(o.fset, "irgo.out", o.g.out.Bytes(), parser.ParseComments)
 	if err != nil {
-		return nil // noopt is for debugging, want to see the incorrect product anyway.
+		return nil // noopt is for debugging, we want to see the incorrect product anyway.
 	}
 
 	o.g.out.Reset()
