@@ -604,17 +604,33 @@ func (g *gen) expression(n *exprNode, void bool) {
 		if n.TypeID == 0 {
 			TODO("%s:\n%s", n.Op.Pos(), pretty(n))
 		}
-		g.w("func() %v {", g.typ2(n.TypeID))
 		for _, v := range a {
 			v.Comma = nil
 		}
-		for i := len(a) - 1; i >= 0; i-- {
-			g.expression(a[i], true)
-			g.w(";")
+		switch {
+		case void:
+			for i := len(a) - 1; i >= 0; i-- {
+				g.expression(a[i], true)
+				g.w(";")
+			}
+			switch n.Op.(type) {
+			case *ir.Const32:
+				return
+			}
+
+			g.w("_ = ")
+			void = false
+			defer g.w("\n")
+		default:
+			g.w("func() %v {", g.typ2(n.TypeID))
+			for i := len(a) - 1; i >= 0; i-- {
+				g.expression(a[i], true)
+				g.w(";")
+			}
+			g.w("return (")
+			void = false
+			defer g.w(")}()")
 		}
-		g.w("return (")
-		void = false
-		defer g.w(")}()")
 	}
 	switch x := n.Op.(type) {
 	case *ir.Argument:
@@ -829,7 +845,16 @@ func (g *gen) expression(n *exprNode, void bool) {
 	case *ir.Label:
 		if x.Cond {
 			if void {
-				//TODO
+				switch n.Childs[1].Op.(type) {
+				case *ir.Const32:
+					//TODO The func() wrapper bypasses an internal compiler error (fixed in Go1.9.)
+					g.w("func() { if ")
+					g.expression(n.Childs[0], false)
+					g.w("== 0 {")
+					g.expression(n.Childs[2], true)
+					g.w("}}()")
+					return
+				}
 			}
 
 			g.w("func() %v { if ", g.typ2(n.TypeID))
