@@ -14,6 +14,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -1306,8 +1307,8 @@ func (g *gen) convert(e *exprNode, tid ir.TypeID) {
 	g.w(")")
 }
 
-func (g *gen) emit(n *node) {
-	for _, op := range n.Ops {
+func (g *gen) emit(n *node, lastVoid bool) {
+	for i, op := range n.Ops {
 		switch x := op.(type) {
 		case *expr:
 			g.expression(x.Expr, true)
@@ -1333,7 +1334,9 @@ func (g *gen) emit(n *node) {
 				g.w("_%v:\n", x.Number)
 			}
 		case *ir.Return:
-			g.w("return\n\n")
+			if i != len(n.Ops)-1 || !lastVoid {
+				g.w("return\n\n")
+			}
 		case *ir.VariableDeclaration:
 			if x.Value == nil {
 				break
@@ -1443,8 +1446,8 @@ func (g *gen) functionDefinition(oi int, f *ir.FunctionDefinition) {
 	}
 	nodes := newGraph(g, f.Body)
 	g.collectLabels(nodes)
-	for _, v := range nodes {
-		g.emit(v)
+	for i, v := range nodes {
+		g.emit(v, i == len(nodes)-1 && len(ft.Results) == 0)
 	}
 	g.w("}\n\n")
 }
@@ -1863,6 +1866,12 @@ func (g *gen) gen() error {
 	return newOpt(g).opt()
 }
 
+var (
+	re  = regexp.MustCompile(`\n\n\treturn`)
+	re2 = regexp.MustCompile(`\n\n}`)
+	re3 = regexp.MustCompile(`\n\t;`)
+)
+
 // New writes Go code generated from obj to out.  No package or import clause
 // is generated. The types argument is consulted for named types.
 func New(out io.Writer, obj []ir.Object, types map[ir.TypeID]string) (err error) {
@@ -1873,7 +1882,11 @@ func New(out io.Writer, obj []ir.Object, types map[ir.TypeID]string) (err error)
 		case nil:
 			b := g.out.Bytes()
 			i := bytes.IndexByte(b, '\n')
-			_, err = out.Write(b[i+1:]) // Remove package clause.
+			b = b[i+1:] // Remove package clause.
+			b = re.ReplaceAll(b, []byte("\n\treturn"))
+			b = re2.ReplaceAll(b, []byte("\n}"))
+			b = re3.ReplaceAll(b, nil)
+			_, err = out.Write(b)
 			if e := g.out.Close(); e != nil && err == nil {
 				err = e
 			}

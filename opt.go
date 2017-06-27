@@ -372,6 +372,63 @@ func (o *opt) body(l []ast.Stmt) {
 	for i := range l {
 		o.stmt(&l[i])
 	}
+	if len(l) < 2 {
+		return
+	}
+
+	for i, v := range l {
+		if i == len(l)-1 {
+			break
+		}
+
+		switch x := v.(type) {
+		case *ast.AssignStmt:
+			if len(x.Lhs) != 1 {
+				break
+			}
+
+			switch y := x.Lhs[0].(type) {
+			case *ast.Ident:
+				if y.Name != "r0" {
+					break
+				}
+
+				switch z := l[i+1].(type) {
+				case *ast.ReturnStmt:
+					if len(z.Results) != 0 {
+						break
+					}
+
+					z.Results = x.Rhs
+					l[i] = &ast.EmptyStmt{}
+				}
+			}
+		case *ast.LabeledStmt:
+			switch x2 := x.Stmt.(type) {
+			case *ast.AssignStmt:
+				if len(x2.Lhs) != 1 {
+					break
+				}
+
+				switch y := x2.Lhs[0].(type) {
+				case *ast.Ident:
+					if y.Name != "r0" {
+						break
+					}
+
+					switch z := l[i+1].(type) {
+					case *ast.ReturnStmt:
+						if len(z.Results) != 0 {
+							break
+						}
+
+						z.Results = x2.Rhs
+						x.Stmt = &ast.EmptyStmt{}
+					}
+				}
+			}
+		}
+	}
 }
 
 func (o *opt) blockStmt(n *ast.BlockStmt) {
