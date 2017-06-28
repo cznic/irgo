@@ -19,7 +19,6 @@ import (
 type opt struct {
 	fset *token.FileSet
 	g    *gen
-	ver  int
 }
 
 func newOpt(g *gen) *opt {

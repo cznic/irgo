@@ -18,25 +18,23 @@ import (
 )
 
 var (
-	idComplex128 = ir.TypeID(dict.SID("complex128"))
-	idComplex64  = ir.TypeID(dict.SID("complex64"))
-	idFloat32    = ir.TypeID(dict.SID("float32"))
-	idFloat64    = ir.TypeID(dict.SID("float64"))
-	idInt16      = ir.TypeID(dict.SID("int16"))
-	idInt32      = ir.TypeID(dict.SID("int32"))
-	idInt32Ptr   = ir.TypeID(dict.SID("*int32"))
-	idInt64      = ir.TypeID(dict.SID("int64"))
-	idInt8       = ir.TypeID(dict.SID("int8"))
-	idInt8Ptr    = ir.TypeID(dict.SID("*int8"))
-	idMain       = ir.NameID(dict.SID("main"))
-	idUint16     = ir.TypeID(dict.SID("uint16"))
-	idUint32     = ir.TypeID(dict.SID("uint32"))
-	idUint64     = ir.TypeID(dict.SID("uint64"))
-	idUint8      = ir.TypeID(dict.SID("uint8"))
-	idUint8Ptr   = ir.TypeID(dict.SID("*uint8"))
-	idVaList     = ir.TypeID(dict.SID("*struct{struct{}}"))
-	idVoid       = ir.TypeID(dict.SID("struct{}"))
-	idVoidPtr    = ir.TypeID(dict.SID("*struct{}"))
+	idComplex64 = ir.TypeID(dict.SID("complex64"))
+	idFloat32   = ir.TypeID(dict.SID("float32"))
+	idFloat64   = ir.TypeID(dict.SID("float64"))
+	idInt16     = ir.TypeID(dict.SID("int16"))
+	idInt32     = ir.TypeID(dict.SID("int32"))
+	idInt32Ptr  = ir.TypeID(dict.SID("*int32"))
+	idInt64     = ir.TypeID(dict.SID("int64"))
+	idInt8      = ir.TypeID(dict.SID("int8"))
+	idInt8Ptr   = ir.TypeID(dict.SID("*int8"))
+	idMain      = ir.NameID(dict.SID("main"))
+	idUint16    = ir.TypeID(dict.SID("uint16"))
+	idUint32    = ir.TypeID(dict.SID("uint32"))
+	idUint64    = ir.TypeID(dict.SID("uint64"))
+	idUint8     = ir.TypeID(dict.SID("uint8"))
+	idUint8Ptr  = ir.TypeID(dict.SID("*uint8"))
+	idVaList    = ir.TypeID(dict.SID("*struct{struct{}}"))
+	idVoidPtr   = ir.TypeID(dict.SID("*struct{}"))
 
 	hooks = strutil.PrettyPrintHooks{
 		reflect.TypeOf(ir.NameID(0)): func(f strutil.Formatter, v interface{}, prefix string, suffix string) {
@@ -99,13 +97,6 @@ type exprNode struct {
 	Op     operation
 	Parent *exprNode
 	ir.TypeID
-}
-
-func (e *exprNode) tree() string {
-	for e.Parent != nil {
-		e = e.Parent
-	}
-	return pretty(e)
 }
 
 type exprList []*exprNode
@@ -171,16 +162,6 @@ func (n *node) addEdge(dest *node) {
 	if _, ok := n.outm[dest]; !ok {
 		n.Out = append(n.Out, dest)
 		n.outm[dest] = struct{}{}
-	}
-}
-
-func (n *node) removeEdge(dest *node) {
-	for i, v := range n.Out {
-		if v == dest {
-			n.Out = append(n.Out[:i:i], n.Out[i+1:]...)
-			delete(n.outm, dest)
-			return
-		}
 	}
 }
 

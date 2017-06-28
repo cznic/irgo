@@ -92,6 +92,7 @@ type gen struct {
 	postIncs  map[ir.TypeID]struct{}
 	preIncs   map[ir.TypeID]struct{}
 	sinks     map[ir.TypeID]struct{}
+	stable    map[ir.TypeID]int
 	storebits map[ir.TypeID]struct{}
 	stores    map[ir.TypeID]struct{}
 	strTab    map[ir.StringID]int
@@ -118,6 +119,7 @@ func newGen(obj []ir.Object, tm map[ir.TypeID]string) *gen {
 		postIncs:  map[ir.TypeID]struct{}{},
 		preIncs:   map[ir.TypeID]struct{}{},
 		sinks:     map[ir.TypeID]struct{}{},
+		stable:    map[ir.TypeID]int{},
 		storebits: map[ir.TypeID]struct{}{},
 		stores:    map[ir.TypeID]struct{}{},
 		strTab:    map[ir.StringID]int{},
@@ -133,6 +135,16 @@ func newGen(obj []ir.Object, tm map[ir.TypeID]string) *gen {
 		}
 	}
 	return g
+}
+
+func (g *gen) reg(t ir.TypeID) int {
+	if n, ok := g.stable[t]; ok {
+		return n
+	}
+
+	n := len(g.stable)
+	g.stable[t] = n
+	return n
 }
 
 func (g *gen) mangle(nm ir.NameID, exported bool, index int) ir.NameID {
@@ -228,7 +240,7 @@ func (g *gen) typ0(buf *buffer.Bytes, t ir.Type, full bool) {
 		}
 
 		g.types[t.ID()] = struct{}{}
-		fmt.Fprintf(buf, "T%d ", t.ID())
+		fmt.Fprintf(buf, "T%d ", g.reg(t.ID()))
 	case ir.Union:
 		if full {
 			buf.WriteString("struct{X [0]struct{")
@@ -243,7 +255,7 @@ func (g *gen) typ0(buf *buffer.Bytes, t ir.Type, full bool) {
 		}
 
 		g.types[t.ID()] = struct{}{}
-		fmt.Fprintf(buf, "T%d ", t.ID())
+		fmt.Fprintf(buf, "T%d ", g.reg(t.ID()))
 	case ir.Pointer:
 		if t.ID() == idVaList {
 			buf.WriteString("[]interface{} ")
@@ -749,7 +761,7 @@ func (g *gen) expression(n *exprNode, void bool) {
 		}
 
 		g.copies[x.TypeID] = struct{}{}
-		g.w("copy%d(", x.TypeID)
+		g.w("copy%d(", g.reg(x.TypeID))
 		g.expression(n.Childs[0], false)
 		g.w(",")
 		g.expression(n.Childs[1], false)
@@ -930,7 +942,7 @@ func (g *gen) expression(n *exprNode, void bool) {
 		}
 
 		g.postIncs[x.TypeID] = struct{}{}
-		g.w("postInc%d(", x.TypeID)
+		g.w("postInc%d(", g.reg(x.TypeID))
 		g.expression(n.Childs[0], false)
 		switch {
 		case g.tc.MustType(x.TypeID).Kind() == ir.Pointer:
@@ -963,7 +975,7 @@ func (g *gen) expression(n *exprNode, void bool) {
 			TODO("%s", x.Pos())
 		}
 
-		g.w("preInc%d(", x.TypeID)
+		g.w("preInc%d(", g.reg(x.TypeID))
 		g.expression(n.Childs[0], false)
 		switch {
 		case g.tc.MustType(x.TypeID).Kind() == ir.Pointer:
@@ -1010,14 +1022,14 @@ func (g *gen) expression(n *exprNode, void bool) {
 		switch {
 		case x.Bits == 0 && !void && !asop:
 			g.stores[x.TypeID] = struct{}{}
-			g.w("store%d(", x.TypeID)
+			g.w("store%d(", g.reg(x.TypeID))
 			g.expression(n.Childs[0], false)
 			g.w(", ")
 			g.expression(n.Childs[1], false)
 			g.w(")")
 		case x.Bits == 0 && !void && asop:
 			g.stores[x.TypeID] = struct{}{}
-			g.w("store%d(", x.TypeID)
+			g.w("store%d(", g.reg(x.TypeID))
 			g.w("func()(*%[1]v, %[1]v){ p := ", g.typ2(x.TypeID))
 			g.expression(n.Childs[0].Childs[0], false)
 			g.w("; return p,")
@@ -1042,11 +1054,11 @@ func (g *gen) expression(n *exprNode, void bool) {
 			g.w("; *p =")
 			g.expression(n.Childs[1], false)
 			g.sinks[n.Childs[1].TypeID] = struct{}{}
-			g.w("; sink%d = *p }", n.Childs[1].TypeID)
+			g.w("; sink%d = *p }", g.reg(n.Childs[1].TypeID))
 		case x.Bits != 0 && !void && !asop:
 			m := (uint64(1)<<uint(x.Bits) - 1) << uint(x.BitOffset)
 			g.storebits[x.TypeID] = struct{}{}
-			g.w("storebits%d(", x.TypeID)
+			g.w("storebits%d(", g.reg(x.TypeID))
 			g.expression(n.Childs[0], false)
 			g.w(", ")
 			g.expression(n.Childs[1], false)
@@ -1054,7 +1066,7 @@ func (g *gen) expression(n *exprNode, void bool) {
 		case x.Bits != 0 && void && !asop:
 			m := (uint64(1)<<uint(x.Bits) - 1) << uint(x.BitOffset)
 			g.storebits[x.TypeID] = struct{}{}
-			g.w("storebits%d(", x.TypeID)
+			g.w("storebits%d(", g.reg(x.TypeID))
 			g.expression(n.Childs[0], false)
 			g.w(", ")
 			g.expression(n.Childs[1], false)
@@ -1793,32 +1805,32 @@ func (g *gen) gen() error {
 	g.w("var nzf32 float32 // -0.0\n")
 	g.w("var nzf64 float64 // -0.0\n")
 	for _, v := range g.helpers(g.sinks) {
-		g.w("var sink%d %v//TODO report GC bug\n", v.TypeID, g.typ2(v.TypeID))
+		g.w("var sink%d %v//TODO report GC bug\n", g.reg(v.TypeID), g.typ2(v.TypeID))
 	}
 	for _, v := range g.helpers(g.copies) {
-		g.w("func copy%d(d, s *%[2]v) *%[2]v { *d = *s; return d }\n", v.TypeID, g.typ2(v.TypeID))
+		g.w("func copy%d(d, s *%[2]v) *%[2]v { *d = *s; return d }\n", g.reg(v.TypeID), g.typ2(v.TypeID))
 	}
 	for _, v := range g.helpers(g.postIncs) {
 		switch {
 		case g.tc.MustType(v.TypeID).Kind() == ir.Pointer:
-			g.w("func postInc%d(p *%[2]v, d int) %[2]v { q := (*uintptr)(unsafe.Pointer(p)); v := *q; *q += uintptr(d); return (%[2]v)(unsafe.Pointer(v)) }\n", v.TypeID, g.typ2(v.TypeID))
+			g.w("func postInc%d(p *%[2]v, d int) %[2]v { q := (*uintptr)(unsafe.Pointer(p)); v := *q; *q += uintptr(d); return (%[2]v)(unsafe.Pointer(v)) }\n", g.reg(v.TypeID), g.typ2(v.TypeID))
 		default:
-			g.w("func postInc%d(p *%[2]v, d %[2]v) %[2]v { v := *p; *p += d; return v }\n", v.TypeID, g.typ2(v.TypeID))
+			g.w("func postInc%d(p *%[2]v, d %[2]v) %[2]v { v := *p; *p += d; return v }\n", g.reg(v.TypeID), g.typ2(v.TypeID))
 		}
 	}
 	for _, v := range g.helpers(g.preIncs) {
 		switch {
 		case g.tc.MustType(v.TypeID).Kind() == ir.Pointer:
-			g.w("func preInc%d(p *%[2]v, d int) %[2]v { q := (*uintptr)(unsafe.Pointer(p)); v := *q + uintptr(d); *q = v; return (%[2]v)(unsafe.Pointer(v)) }\n", v.TypeID, g.typ2(v.TypeID))
+			g.w("func preInc%d(p *%[2]v, d int) %[2]v { q := (*uintptr)(unsafe.Pointer(p)); v := *q + uintptr(d); *q = v; return (%[2]v)(unsafe.Pointer(v)) }\n", g.reg(v.TypeID), g.typ2(v.TypeID))
 		default:
-			g.w("func preInc%d(p *%[2]v, d %[2]v) %[2]v { v := *p + d; *p = v; return v }\n", v.TypeID, g.typ2(v.TypeID))
+			g.w("func preInc%d(p *%[2]v, d %[2]v) %[2]v { v := *p + d; *p = v; return v }\n", g.reg(v.TypeID), g.typ2(v.TypeID))
 		}
 	}
 	for _, v := range g.helpers(g.storebits) {
-		g.w("func storebits%d(p *%[2]v, v %[2]v, m uint64, o uint) %[2]v { *p = *p&^%[2]v(m)|(v<<o&%[2]v(m)); return v }\n", v.TypeID, g.typ2(v.TypeID))
+		g.w("func storebits%d(p *%[2]v, v %[2]v, m uint64, o uint) %[2]v { *p = *p&^%[2]v(m)|(v<<o&%[2]v(m)); return v }\n", g.reg(v.TypeID), g.typ2(v.TypeID))
 	}
 	for _, v := range g.helpers(g.stores) {
-		g.w("func store%d(p *%[2]v, v %[2]v) %[2]v { *p = v; return v }\n", v.TypeID, g.typ2(v.TypeID))
+		g.w("func store%d(p *%[2]v, v %[2]v) %[2]v { *p = v; return v }\n", g.reg(v.TypeID), g.typ2(v.TypeID))
 	}
 	for k := range g.tm {
 		delete(g.types, k)
@@ -1834,7 +1846,7 @@ func (g *gen) gen() error {
 	g.tm = nil
 	for _, v := range a {
 		id := ir.TypeID(v)
-		g.w("\ntype %s %v // T%d %v\n", tm[id], g.fullType(id), id, id)
+		g.w("\ntype %s %v // T%d %v\n", tm[id], g.fullType(id), g.reg(id), id)
 	}
 	a = a[:0]
 	for k := range g.types {
@@ -1843,7 +1855,7 @@ func (g *gen) gen() error {
 	sort.Ints(a)
 	for _, v := range a {
 		id := ir.TypeID(v)
-		g.w("\ntype T%d %v // %v\n", id, g.fullType(id), id)
+		g.w("\ntype T%d %v // %v\n", g.reg(id), g.fullType(id), id)
 	}
 	if g.strings.Len() != 0 {
 		g.w("func str(n int) *int8 { return (*int8)(unsafe.Pointer(&strTab[n]))}\n")
