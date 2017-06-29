@@ -240,7 +240,7 @@ func (g *gen) typ0(buf *buffer.Bytes, t ir.Type, full bool) {
 		}
 
 		g.types[t.ID()] = struct{}{}
-		fmt.Fprintf(buf, "T%d ", g.reg(t.ID()))
+		fmt.Fprintf(buf, "t%d ", g.reg(t.ID()))
 	case ir.Union:
 		if full {
 			buf.WriteString("struct{X [0]struct{")
@@ -255,7 +255,7 @@ func (g *gen) typ0(buf *buffer.Bytes, t ir.Type, full bool) {
 		}
 
 		g.types[t.ID()] = struct{}{}
-		fmt.Fprintf(buf, "T%d ", g.reg(t.ID()))
+		fmt.Fprintf(buf, "t%d ", g.reg(t.ID()))
 	case ir.Pointer:
 		if t.ID() == idVaList {
 			buf.WriteString("[]interface{} ")
@@ -750,7 +750,7 @@ func (g *gen) expression(n *exprNode, void bool) {
 			return
 		}
 
-		g.convert(e, x.Result)
+		g.convert2(e, x.TypeID, x.Result)
 	case *ir.Copy:
 		if void {
 			g.w("*")
@@ -1041,7 +1041,24 @@ func (g *gen) expression(n *exprNode, void bool) {
 			g.w("*")
 			g.expression(n.Childs[0], false)
 			g.w("=")
-			g.convert(n.Childs[1], g.tc.MustType(n.Childs[0].TypeID).(*ir.PointerType).Element.ID())
+			switch {
+			case n.Childs[0].TypeID == idPVoidPtr && n.Childs[1].TypeID == idVoidPtr:
+				switch x := n.Childs[1].Op.(type) {
+				case *ir.Convert:
+					if x.Result == idVoidPtr {
+						g.convert(n.Childs[1], g.tc.MustType(n.Childs[0].TypeID).(*ir.PointerType).Element.ID())
+						break
+					}
+
+					g.w("unsafe.Pointer")
+					g.expression(n.Childs[1], false)
+				default:
+					g.w("unsafe.Pointer")
+					g.expression(n.Childs[1], false)
+				}
+			default:
+				g.convert(n.Childs[1], g.tc.MustType(n.Childs[0].TypeID).(*ir.PointerType).Element.ID())
+			}
 			switch n.Childs[0].Op.(type) {
 			case *ir.Global:
 				g.w("\nbug20530(*")
@@ -1187,18 +1204,20 @@ func (g *gen) expression(n *exprNode, void bool) {
 	}
 }
 
-func (g *gen) convert(e *exprNode, tid ir.TypeID) {
+func (g *gen) convert(e *exprNode, to ir.TypeID) { g.convert2(e, e.TypeID, to) }
+
+func (g *gen) convert2(e *exprNode, from, to ir.TypeID) {
 	if x, ok := e.Op.(*ir.Global); ok && x.NameID == idMain {
 		g.expression(e, false)
 		return
 	}
 
-	if e.TypeID == tid {
+	if from == to {
 		g.expression(e, false)
 		return
 	}
 
-	if tid == idVaList {
+	if to == idVaList {
 		switch x := e.Op.(type) {
 		case *ir.Const32:
 			switch x.Value {
@@ -1216,8 +1235,8 @@ func (g *gen) convert(e *exprNode, tid ir.TypeID) {
 		}
 	}
 
-	if e.TypeID == idVaList {
-		switch t := g.tc.MustType(tid); {
+	if from == idVaList {
+		switch t := g.tc.MustType(to); {
 		case t.Kind() == ir.Pointer:
 			if u := t.(*ir.PointerType); u.Element.Kind() == ir.Function {
 				g.w("%s.VAOther(&", crt)
@@ -1226,7 +1245,7 @@ func (g *gen) convert(e *exprNode, tid ir.TypeID) {
 				break
 			}
 
-			if tid != idVoidPtr {
+			if to != idVoidPtr {
 				g.w("(%v)(%s.VAPointer(&", g.typ(t), crt)
 				g.expression(e, false)
 				g.w("))")
@@ -1234,8 +1253,8 @@ func (g *gen) convert(e *exprNode, tid ir.TypeID) {
 			}
 
 			fallthrough
-		case isIntegalType(tid):
-			s := g.tc.MustType(tid).Kind().String()
+		case isIntegalType(to):
+			s := g.tc.MustType(to).Kind().String()
 			s = strings.ToUpper(s[:1]) + s[1:]
 			g.w("%s.VA%s(&", crt, s)
 			g.expression(e, false)
@@ -1248,15 +1267,26 @@ func (g *gen) convert(e *exprNode, tid ir.TypeID) {
 		return
 	}
 
-	et := g.tc.MustType(e.TypeID)
-	if et.Kind() == ir.Pointer && tid == idVoidPtr {
+	t := g.tc.MustType(to)
+	if t.Kind() == ir.Pointer {
+		switch x := e.Op.(type) {
+		case *ir.Const32:
+			switch x.Value {
+			case 0:
+				g.w("nil")
+				return
+			}
+		}
+	}
+
+	et := g.tc.MustType(from)
+	if et.Kind() == ir.Pointer && to == idVoidPtr {
 		if _, ok := e.Op.(*ir.Convert); ok {
-			g.convert(e.Childs[0], tid)
+			g.convert(e.Childs[0], to)
 			return
 		}
 	}
 
-	t := g.tc.MustType(tid)
 	if t.Kind() == ir.Pointer {
 		et := t.(*ir.PointerType).Element
 		if et.Kind() == ir.Function {
@@ -1280,7 +1310,7 @@ func (g *gen) convert(e *exprNode, tid ir.TypeID) {
 		}
 	}
 
-	if et.Kind() == ir.Pointer && isIntegalType(tid) {
+	if et.Kind() == ir.Pointer && isIntegalType(to) {
 		g.w("(%v)(uintptr(unsafe.Pointer", g.typ(t))
 		g.expression(e, false)
 		g.w("))")
@@ -1301,12 +1331,12 @@ func (g *gen) convert(e *exprNode, tid ir.TypeID) {
 		return
 	}
 
-	g.w("(%v)(", g.typ2(tid))
+	g.w("(%v)(", g.typ2(to))
 	switch {
 	case t.Kind() == ir.Pointer:
 		g.w("unsafe.Pointer(")
 		switch {
-		case g.tc.MustType(e.TypeID).Kind() != ir.Pointer:
+		case g.tc.MustType(from).Kind() != ir.Pointer:
 			g.w("uintptr")
 			g.expression(e, false)
 		default:
@@ -1802,6 +1832,7 @@ func (g *gen) gen() error {
 	g.w("func u32(n uint32) uint32 { return n }\n")
 	g.w("func u64(n uint64) uint64 { return n }\n")
 	g.w("func u8(n byte) byte { return n }\n")
+	g.w("var inf = math.Inf(1)\n")
 	g.w("var nzf32 float32 // -0.0\n")
 	g.w("var nzf64 float64 // -0.0\n")
 	for _, v := range g.helpers(g.sinks) {
@@ -1846,7 +1877,7 @@ func (g *gen) gen() error {
 	g.tm = nil
 	for _, v := range a {
 		id := ir.TypeID(v)
-		g.w("\ntype %s %v // T%d %v\n", tm[id], g.fullType(id), g.reg(id), id)
+		g.w("\ntype %s %v // t%d %v\n", tm[id], g.fullType(id), g.reg(id), id)
 	}
 	a = a[:0]
 	for k := range g.types {
@@ -1855,7 +1886,7 @@ func (g *gen) gen() error {
 	sort.Ints(a)
 	for _, v := range a {
 		id := ir.TypeID(v)
-		g.w("\ntype T%d %v // %v\n", g.reg(id), g.fullType(id), id)
+		g.w("\ntype t%d %v // %v\n", g.reg(id), g.fullType(id), id)
 	}
 	if g.strings.Len() != 0 {
 		g.w("func str(n int) *int8 { return (*int8)(unsafe.Pointer(&strTab[n]))}\n")

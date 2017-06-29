@@ -28,6 +28,7 @@ var (
 	idInt8      = ir.TypeID(dict.SID("int8"))
 	idInt8Ptr   = ir.TypeID(dict.SID("*int8"))
 	idMain      = ir.NameID(dict.SID("main"))
+	idPVoidPtr  = ir.TypeID(dict.SID("**struct{}"))
 	idUint16    = ir.TypeID(dict.SID("uint16"))
 	idUint32    = ir.TypeID(dict.SID("uint32"))
 	idUint64    = ir.TypeID(dict.SID("uint64"))
