@@ -790,7 +790,11 @@ func varInfo(ops []ir.Operation) (nfo []varNfo) {
 		case *ir.EndScope:
 			a = a[:len(a)-1]
 		case *ir.VariableDeclaration:
-			nfo = append(nfo, varNfo{x, a[len(a)-1]})
+			v := varNfo{def: x, scope: a[len(a)-1]}
+			if x.Value != nil {
+				v.w++
+			}
+			nfo = append(nfo, v)
 		}
 	}
 	if len(a) != 0 {

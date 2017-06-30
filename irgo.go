@@ -50,7 +50,10 @@ func TODO(msg string, more ...interface{}) string { //TODOOK
 
 type varNfo struct {
 	def   *ir.VariableDeclaration
+	i     int
+	r     int
 	scope int
+	w     int
 }
 
 type typeNfo struct {
@@ -1135,13 +1138,17 @@ func (g *gen) expression(n *exprNode, void bool) {
 			return
 		}
 
-		nfo := g.f.varNfo[x.Index]
+		nfo := &g.f.varNfo[x.Index]
 		sc := nfo.scope
 		if sc == 0 {
 			sc = -1
 		}
-		if x.Address {
+		switch {
+		case x.Address:
 			g.w("&")
+			nfo.w++
+		default:
+			nfo.r++
 		}
 		switch {
 		case nfo.def.NameID == 0:
@@ -1479,25 +1486,58 @@ func (g *gen) functionDefinition(oi int, f *ir.FunctionDefinition) {
 	if FTrace {
 		g.w("ftrace(%q)\n", nm)
 	}
+	m := map[ir.TypeID][]varNfo{}
 	for i, v := range g.f.varNfo {
-		sc := v.scope
-		if sc == 0 {
-			sc = -1
+		v.i = i
+		t := v.def.TypeID
+		m[t] = append(m[t], v)
+	}
+	var a []int
+	for k := range m {
+		a = append(a, int(k))
+	}
+	sort.Ints(a)
+	for _, t := range a {
+		g.w("var ")
+		t := ir.TypeID(t)
+		a := m[t]
+		for i, v := range a {
+			sc := v.scope
+			if sc == 0 {
+				sc = -1
+			}
+			if i != 0 {
+				g.w(",")
+			}
+			switch {
+			case v.def.NameID == 0:
+				g.w("_%v", v.i)
+			default:
+				nm := g.mangle(v.def.NameID, false, sc)
+				g.w("%v", nm)
+			}
 		}
-		switch {
-		case v.def.NameID == 0:
-			g.w("var _%v %v\n", i, g.typ2(v.def.TypeID))
-			g.w("_ = _%v\n", i)
-		default:
-			nm := g.mangle(v.def.NameID, false, sc)
-			g.w("var %v %v\n", nm, g.typ2(v.def.TypeID))
-			g.w("_ = %v\n", nm)
-		}
+		g.w(" %v\n", g.typ2(t))
 	}
 	nodes := newGraph(g, f.Body)
 	g.collectLabels(nodes)
 	for i, v := range nodes {
 		g.emit(v, i == len(nodes)-1 && len(ft.Results) == 0)
+	}
+	ok := true
+	for _, v := range g.f.varNfo {
+		if v.r == 0 && v.def.NameID != 0 {
+			sc := v.scope
+			if sc == 0 {
+				sc = -1
+			}
+			nm := g.mangle(v.def.NameID, false, sc)
+			g.w("_ = %v\n", nm)
+			ok = false
+		}
+	}
+	if !ok && len(ft.Results) != 0 {
+		g.w("panic(0)\n")
 	}
 	g.w("}\n\n")
 }
