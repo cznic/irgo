@@ -130,7 +130,7 @@ func newGen(obj []ir.Object, tm map[ir.TypeID]string) *gen {
 	for _, v := range obj {
 		switch x := v.(type) {
 		case *ir.FunctionDefinition:
-			nm := g.mangle(x.NameID, x.Linkage == ir.ExternalLinkage, -1)
+			nm := g.mangle2(x.Package, x.NameID, x.Linkage == ir.ExternalLinkage, -1)
 			g.fns[nm] = x
 		}
 	}
@@ -148,6 +148,10 @@ func (g *gen) reg(t ir.TypeID) int {
 }
 
 func (g *gen) mangle(nm ir.NameID, exported bool, index int) ir.NameID {
+	return g.mangle2(0, nm, exported, index)
+}
+
+func (g *gen) mangle2(pkg, nm ir.NameID, exported bool, index int) ir.NameID {
 	k := cname{nm, exported, index}
 	if x, ok := g.mangled[k]; ok {
 		return x
@@ -163,6 +167,10 @@ func (g *gen) mangle(nm ir.NameID, exported bool, index int) ir.NameID {
 			panic("internal error")
 		}
 
+		if pkg != 0 {
+			buf.Write(dict.S(int(pkg)))
+			buf.WriteByte('.')
+		}
 		buf.WriteByte('X')
 	default:
 		if index >= 0 {
@@ -344,7 +352,7 @@ func (g *gen) string(n ir.StringID) int {
 		return x
 	}
 
-	x := roundup(g.strings.Len(), 4)
+	x := g.strings.Len()
 	for g.strings.Len() < x {
 		g.strings.WriteByte(0)
 	}
@@ -672,7 +680,7 @@ func (g *gen) expression(n *exprNode, void bool) {
 		if g.isBuiltin(x.Index) {
 			g.w("%s.", crt)
 		}
-		g.w("%s", g.mangle(f.NameID, f.Linkage == ir.ExternalLinkage, -1))
+		g.w("%s", g.mangle2(f.Package, f.NameID, f.Linkage == ir.ExternalLinkage, -1))
 		ft := g.tc.MustType(f.TypeID).(*ir.FunctionType)
 		g.call(ft, n.Childs)
 	case *ir.CallFP:
@@ -1431,7 +1439,7 @@ func (g *gen) emit(n *node, lastVoid bool) {
 }
 
 func (g *gen) functionDefinition(oi int, f *ir.FunctionDefinition) {
-	if g.isBuiltin(oi) {
+	if g.isBuiltin(oi) || f.Package != 0 {
 		return
 	}
 
@@ -1467,7 +1475,7 @@ func (g *gen) functionDefinition(oi int, f *ir.FunctionDefinition) {
 			g.w("(r0 %s)", g.typ(ft.Results[0]))
 		}
 	}
-	g.w("{ // %v\n", g.pos(f.Position))
+	g.w("{\n")
 	if FTrace {
 		g.w("ftrace(%q)\n", nm)
 	}
@@ -1478,11 +1486,11 @@ func (g *gen) functionDefinition(oi int, f *ir.FunctionDefinition) {
 		}
 		switch {
 		case v.def.NameID == 0:
-			g.w("var _%v %v // %s\n", i, g.typ2(v.def.TypeID), g.pos(v.def.Pos()))
+			g.w("var _%v %v\n", i, g.typ2(v.def.TypeID))
 			g.w("_ = _%v\n", i)
 		default:
 			nm := g.mangle(v.def.NameID, false, sc)
-			g.w("var %v %v // %s\n", nm, g.typ2(v.def.TypeID), g.pos(v.def.Pos()))
+			g.w("var %v %v\n", nm, g.typ2(v.def.TypeID))
 			g.w("_ = %v\n", nm)
 		}
 	}
@@ -1713,6 +1721,10 @@ func (g *gen) value(pos token.Position, id ir.TypeID, v ir.Value) {
 }
 
 func (g *gen) dataDefinition(d *ir.DataDefinition) {
+	if d.Package != 0 {
+		return
+	}
+
 	nm := g.mangle(d.NameID, d.Linkage == ir.ExternalLinkage, -1)
 	g.w("var %s ", nm)
 	t := g.tc.MustType(d.TypeID)
@@ -1731,7 +1743,7 @@ func (g *gen) dataDefinition(d *ir.DataDefinition) {
 	default:
 		g.w("%s", g.typ(t))
 	}
-	g.w(" // %s\n\n", g.pos(d.Position))
+	g.w("\n\n")
 	if isZeroValue(d.Value) {
 		return
 	}
