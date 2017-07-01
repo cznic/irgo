@@ -403,7 +403,11 @@ func (o *opt) body(l []ast.Stmt) {
 				}
 			}
 		case *ast.LabeledStmt:
+		more:
 			switch x2 := x.Stmt.(type) {
+			case *ast.LabeledStmt:
+				x = x2
+				goto more
 			case *ast.AssignStmt:
 				if len(x2.Lhs) != 1 {
 					break

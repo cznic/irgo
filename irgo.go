@@ -35,7 +35,8 @@ const (
 var (
 	// Testing amends things for tests.
 	Testing bool
-	FTrace  bool // Testing hook.
+	// Testing hook.
+	FTrace bool
 
 	dict = xc.Dict
 )
@@ -87,7 +88,7 @@ type gen struct {
 	copies    map[ir.TypeID]struct{}
 	f         *fn
 	fns       map[ir.NameID]*ir.FunctionDefinition
-	labels    map[int]bool
+	labels    map[int]int
 	mangled   map[cname]ir.NameID
 	model     ir.MemoryModel
 	obj       []ir.Object
@@ -380,7 +381,7 @@ func (g *gen) wstring(n ir.StringID) int {
 }
 
 func (g *gen) collectLabels(nodes []*node) {
-	g.labels = map[int]bool{}
+	g.labels = map[int]int{}
 	for _, v := range nodes {
 		for _, op := range v.Ops {
 			switch x := op.(type) {
@@ -391,26 +392,26 @@ func (g *gen) collectLabels(nodes []*node) {
 					if n == 0 {
 						n = -y.Number
 					}
-					g.labels[n] = true
+					g.labels[n]++
 				case *ir.Jz:
 					n := int(y.NameID)
 					if n == 0 {
 						n = -y.Number
 					}
-					g.labels[n] = true
+					g.labels[n]++
 				case *ir.Switch:
 					for _, v := range y.Labels {
 						n := int(v.NameID)
 						if n == 0 {
 							n = -v.Number
 						}
-						g.labels[n] = true
+						g.labels[n]++
 					}
 					n := int(y.Default.NameID)
 					if n == 0 {
 						n = -y.Default.Number
 					}
-					g.labels[n] = true
+					g.labels[n]++
 				}
 			case *ir.Jmp:
 				if x.Cond {
@@ -421,7 +422,7 @@ func (g *gen) collectLabels(nodes []*node) {
 				if n == 0 {
 					n = -x.Number
 				}
-				g.labels[n] = true
+				g.labels[n]++
 			}
 		}
 	}
@@ -601,7 +602,9 @@ func (g *gen) shift(n *exprNode) {
 	g.expression(n.Childs[1], false)
 }
 
-func (g *gen) expression(n *exprNode, void bool) {
+func (g *gen) expression(n *exprNode, void bool) bool { return g.expression2(n, void, 0) }
+
+func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 	switch n.Op.(type) {
 	case
 		*ir.Drop,
@@ -639,7 +642,7 @@ func (g *gen) expression(n *exprNode, void bool) {
 			}
 			switch n.Op.(type) {
 			case *ir.Const32:
-				return
+				return false
 			}
 
 			g.w("_ = ")
@@ -659,7 +662,7 @@ func (g *gen) expression(n *exprNode, void bool) {
 	switch x := n.Op.(type) {
 	case *ir.Argument:
 		if void {
-			return
+			return false
 		}
 
 		if x.Address {
@@ -758,7 +761,7 @@ func (g *gen) expression(n *exprNode, void bool) {
 		e := n.Childs[0]
 		if void && e.TypeID != idVaList {
 			g.expression(e, true)
-			return
+			return false
 		}
 
 		g.convert2(e, x.TypeID, x.Result)
@@ -768,7 +771,7 @@ func (g *gen) expression(n *exprNode, void bool) {
 			g.expression(n.Childs[0], false)
 			g.w("= *")
 			g.expression(n.Childs[1], false)
-			return
+			return false
 		}
 
 		g.copies[x.TypeID] = struct{}{}
@@ -815,7 +818,7 @@ func (g *gen) expression(n *exprNode, void bool) {
 				g.w("(*%v)(unsafe.Pointer(uintptr(", g.typ(ft))
 				g.convert(e, idVoidPtr)
 				g.w(")+uintptr(%v/* X%v */)))", off, x.Index)
-				return
+				return false
 			}
 
 			g.w("(")
@@ -833,11 +836,11 @@ func (g *gen) expression(n *exprNode, void bool) {
 			case ir.Pointer:
 				if t.(*ir.PointerType).Element.Kind() == ir.Function {
 					g.w("%s%s", s, nm)
-					return
+					return false
 				}
 
 				g.w("&%s", nm)
-				return
+				return false
 			default:
 				TODO("%s: %T\n%s", x.Pos(), x, x.TypeID)
 			}
@@ -845,6 +848,18 @@ func (g *gen) expression(n *exprNode, void bool) {
 
 		g.w("%s%s", s, nm)
 	case *ir.Jnz:
+		l := int(x.NameID)
+		if l == 0 {
+			l = -x.Number
+		}
+		if nextLabel == l {
+			g.w("if")
+			g.expression(n.Childs[0], false)
+			g.w("== 0 {")
+			g.labels[l]--
+			return true
+		}
+
 		g.w("if")
 		g.expression(n.Childs[0], false)
 		g.w("!= 0 { goto ")
@@ -854,8 +869,20 @@ func (g *gen) expression(n *exprNode, void bool) {
 		default:
 			g.w("_%v", x.Number)
 		}
-		g.w("}\n")
+		g.w("}")
 	case *ir.Jz:
+		l := int(x.NameID)
+		if l == 0 {
+			l = -x.Number
+		}
+		if nextLabel == l {
+			g.w("if")
+			g.expression(n.Childs[0], false)
+			g.w("!= 0 {")
+			g.labels[l]--
+			return true
+		}
+
 		g.w("if")
 		g.expression(n.Childs[0], false)
 		g.w("== 0 { goto ")
@@ -865,7 +892,7 @@ func (g *gen) expression(n *exprNode, void bool) {
 		default:
 			g.w("_%v", x.Number)
 		}
-		g.w("}\n")
+		g.w("}")
 	case *ir.Label:
 		if x.Cond {
 			if void {
@@ -877,7 +904,7 @@ func (g *gen) expression(n *exprNode, void bool) {
 					g.w("== 0 {")
 					g.expression(n.Childs[2], true)
 					g.w("}}()")
-					return
+					return false
 				}
 			}
 
@@ -895,7 +922,7 @@ func (g *gen) expression(n *exprNode, void bool) {
 			g.w("}; return")
 			g.expression(n.Childs[2], false)
 			g.w("}()")
-			return
+			return false
 		}
 
 		g.w("bool2int(")
@@ -915,7 +942,7 @@ func (g *gen) expression(n *exprNode, void bool) {
 		g.w("*")
 		if _, ok := n.Childs[0].Op.(*ir.Dup); ok {
 			g.w("p")
-			return
+			return false
 		}
 
 		g.expression(n.Childs[0], false)
@@ -949,7 +976,7 @@ func (g *gen) expression(n *exprNode, void bool) {
 					g.w("+= %v", x.Delta)
 				}
 			}
-			return
+			return false
 		}
 
 		g.postIncs[x.TypeID] = struct{}{}
@@ -978,7 +1005,7 @@ func (g *gen) expression(n *exprNode, void bool) {
 					g.w("+= %v", x.Delta)
 				}
 			}
-			return
+			return false
 		}
 
 		g.preIncs[x.TypeID] = struct{}{}
@@ -1047,7 +1074,7 @@ func (g *gen) expression(n *exprNode, void bool) {
 			g.expression(n.Childs[1], false)
 			g.w("}()")
 			g.w(")")
-			return
+			return false
 		case x.Bits == 0 && void && !asop:
 			g.w("*")
 			g.expression(n.Childs[0], false)
@@ -1135,7 +1162,7 @@ func (g *gen) expression(n *exprNode, void bool) {
 		}
 	case *ir.Variable:
 		if void {
-			return
+			return false
 		}
 
 		nfo := &g.f.varNfo[x.Index]
@@ -1201,7 +1228,7 @@ func (g *gen) expression(n *exprNode, void bool) {
 
 		if void {
 			g.expression(n.Childs[0], true)
-			return
+			return false
 		}
 
 		g.shift(n)
@@ -1217,6 +1244,7 @@ func (g *gen) expression(n *exprNode, void bool) {
 	default:
 		TODO("%s: %T", x.Pos(), x)
 	}
+	return false
 }
 
 func (g *gen) convert(e *exprNode, to ir.TypeID) { g.convert2(e, e.TypeID, to) }
@@ -1364,11 +1392,14 @@ func (g *gen) convert2(e *exprNode, from, to ir.TypeID) {
 	g.w(")")
 }
 
-func (g *gen) emit(n *node, lastVoid bool) {
+func (g *gen) emit(n *node, lastVoid bool, nextLabel int) {
+	var r bool
 	for i, op := range n.Ops {
 		switch x := op.(type) {
 		case *expr:
-			g.expression(x.Expr, true)
+			if g.expression2(x.Expr, true, nextLabel) {
+				r = true
+			}
 			g.w("\n")
 		case *ir.Jmp:
 			g.w("goto ")
@@ -1378,9 +1409,8 @@ func (g *gen) emit(n *node, lastVoid bool) {
 			default:
 				g.w("_%v\n", x.Number)
 			}
-			g.w("\n")
 		case *ir.Label:
-			if !g.labels[label(x)] {
+			if g.labels[label(x)] == 0 {
 				break
 			}
 
@@ -1392,7 +1422,7 @@ func (g *gen) emit(n *node, lastVoid bool) {
 			}
 		case *ir.Return:
 			if i != len(n.Ops)-1 || !lastVoid {
-				g.w("return\n\n")
+				g.w("return\n")
 			}
 		case *ir.VariableDeclaration:
 			if x.Value == nil {
@@ -1443,6 +1473,9 @@ func (g *gen) emit(n *node, lastVoid bool) {
 			TODO("%s: %T", x.Pos(), x)
 		}
 	}
+	if r {
+		g.w("}\n")
+	}
 }
 
 func (g *gen) functionDefinition(oi int, f *ir.FunctionDefinition) {
@@ -1461,6 +1494,7 @@ func (g *gen) functionDefinition(oi int, f *ir.FunctionDefinition) {
 
 	defer buf.Close()
 
+	g.w("%s", f.Comment)
 	nm := g.mangle(f.NameID, f.Linkage == ir.ExternalLinkage, -1)
 	g.w("func %v(tls *%v.TLS", nm, crt)
 	switch {
@@ -1522,7 +1556,16 @@ func (g *gen) functionDefinition(oi int, f *ir.FunctionDefinition) {
 	nodes := newGraph(g, f.Body)
 	g.collectLabels(nodes)
 	for i, v := range nodes {
-		g.emit(v, i == len(nodes)-1 && len(ft.Results) == 0)
+		nextLabel := mathutil.MinInt
+		if i < len(nodes)-1 {
+			if x, ok := nodes[i+1].Ops[0].(*ir.Label); ok {
+				nextLabel = int(x.NameID)
+				if nextLabel == 0 {
+					nextLabel = -x.Number
+				}
+			}
+		}
+		g.emit(v, i == len(nodes)-1 && len(ft.Results) == 0, nextLabel)
 	}
 	ok := true
 	for _, v := range g.f.varNfo {
@@ -1965,6 +2008,9 @@ var (
 	re  = regexp.MustCompile(`\n\n\treturn`)
 	re2 = regexp.MustCompile(`\n\n}`)
 	re3 = regexp.MustCompile(`\n\t;`)
+	re4 = regexp.MustCompile(`\n\n\t\treturn`)
+	re5 = regexp.MustCompile(`\n\n\t}`)
+	re6 = regexp.MustCompile(`{\n\n`)
 )
 
 // New writes Go code generated from obj to out.  No package or import clause
@@ -1981,6 +2027,9 @@ func New(out io.Writer, obj []ir.Object, types map[ir.TypeID]string) (err error)
 			b = re.ReplaceAll(b, []byte("\n\treturn"))
 			b = re2.ReplaceAll(b, []byte("\n}"))
 			b = re3.ReplaceAll(b, nil)
+			b = re4.ReplaceAll(b, []byte("\n\t\treturn"))
+			b = re5.ReplaceAll(b, []byte("\n\t}"))
+			b = re6.ReplaceAll(b, []byte("{\n"))
 			_, err = out.Write(b)
 			if e := g.out.Close(); e != nil && err == nil {
 				err = e
