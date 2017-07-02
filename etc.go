@@ -228,9 +228,47 @@ func splitPoints(ops []ir.Operation) sort.IntSlice {
 
 func (g *graph) addEdges(nodes []*node) {
 	// Collect symbol table.
-	for _, v := range nodes {
+	a := make([]*ir.Label, len(nodes))
+	g.labels = map[int]int{}
+	for i, v := range nodes {
 		if x, ok := v.Ops[0].(*ir.Label); ok && !x.LOr && !x.LAnd && !x.Nop && !x.Cond {
-			g.label2codeNode[label(x)] = v
+			a[i] = x
+			n := label(x)
+			g.label2codeNode[n] = v
+			g.labels[n] = n
+		}
+	}
+	for i := 0; i < len(a); i++ {
+		v := a[i]
+		if v == nil || len(nodes[i].Ops) != 1 {
+			continue
+		}
+
+		start := i
+		for i < len(a)-1 && a[i+1] != nil {
+			i++
+			if len(nodes[i].Ops) != 1 {
+				break
+			}
+		}
+		grp := a[start : i+1]
+		nm := 0
+		for _, v := range grp {
+			n := label(v)
+			if nm == 0 && n > 0 {
+				nm = n
+			}
+		}
+		if nm == 0 {
+			nm = label(grp[0])
+		}
+		for _, v := range grp {
+			switch n := label(v); {
+			case n > 0:
+				g.labels[n] = n
+			default:
+				g.labels[n] = nm
+			}
 		}
 	}
 
@@ -244,44 +282,24 @@ func (g *graph) addEdges(nodes []*node) {
 					break
 				}
 
-				n := int(x.NameID)
-				if n == 0 {
-					n = -x.Number
-				}
-				node.addEdge(g.label2codeNode[n])
+				node.addEdge(g.label2codeNode[label2(x.NameID, x.Number)])
 			case *ir.Jz:
 				if x.LOp {
 					break
 				}
 
-				n := int(x.NameID)
-				if n == 0 {
-					n = -x.Number
-				}
-				node.addEdge(g.label2codeNode[n])
+				node.addEdge(g.label2codeNode[label2(x.NameID, x.Number)])
 			case *ir.Jnz:
 				if x.LOp {
 					break
 				}
 
-				n := int(x.NameID)
-				if n == 0 {
-					n = -x.Number
-				}
-				node.addEdge(g.label2codeNode[n])
+				node.addEdge(g.label2codeNode[label2(x.NameID, x.Number)])
 			case *ir.Switch:
 				for _, v := range x.Labels {
-					n := int(v.NameID)
-					if n == 0 {
-						n = -v.Number
-					}
-					node.addEdge(g.label2codeNode[n])
+					node.addEdge(g.label2codeNode[label2(v.NameID, v.Number)])
 				}
-				n := int(x.Default.NameID)
-				if n == 0 {
-					n = -x.Default.Number
-				}
-				node.addEdge(g.label2codeNode[n])
+				node.addEdge(g.label2codeNode[label2(x.Default.NameID, x.Default.Number)])
 			}
 		}
 		if i+1 < len(nodes) {
@@ -829,12 +847,15 @@ func (s switchPairs) Less(i, j int) bool {
 
 func (s switchPairs) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
 
-func label(l *ir.Label) int {
-	n := int(l.NameID)
-	if n == 0 {
-		n = -l.Number
+func label(l *ir.Label) int { return label2(l.NameID, l.Number) }
+
+func label2(nm ir.NameID, n int) int {
+	m := int(nm)
+	if m == 0 {
+		return -n
 	}
-	return n
+
+	return m
 }
 
 func isZeroValue(v ir.Value) bool {

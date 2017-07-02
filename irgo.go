@@ -89,6 +89,7 @@ type gen struct {
 	f         *fn
 	fns       map[ir.NameID]*ir.FunctionDefinition
 	labels    map[int]int
+	lblUsed   map[int]int
 	mangled   map[cname]ir.NameID
 	model     ir.MemoryModel
 	obj       []ir.Object
@@ -381,48 +382,28 @@ func (g *gen) wstring(n ir.StringID) int {
 }
 
 func (g *gen) collectLabels(nodes []*node) {
-	g.labels = map[int]int{}
+	g.lblUsed = map[int]int{}
 	for _, v := range nodes {
 		for _, op := range v.Ops {
 			switch x := op.(type) {
 			case *expr:
 				switch y := x.Expr.Op.(type) {
 				case *ir.Jnz:
-					n := int(y.NameID)
-					if n == 0 {
-						n = -y.Number
-					}
-					g.labels[n]++
+					g.lblUsed[g.labels[label2(y.NameID, y.Number)]]++
 				case *ir.Jz:
-					n := int(y.NameID)
-					if n == 0 {
-						n = -y.Number
-					}
-					g.labels[n]++
+					g.lblUsed[g.labels[label2(y.NameID, y.Number)]]++
 				case *ir.Switch:
 					for _, v := range y.Labels {
-						n := int(v.NameID)
-						if n == 0 {
-							n = -v.Number
-						}
-						g.labels[n]++
+						g.lblUsed[g.labels[label2(v.NameID, v.Number)]]++
 					}
-					n := int(y.Default.NameID)
-					if n == 0 {
-						n = -y.Default.Number
-					}
-					g.labels[n]++
+					g.lblUsed[g.labels[label2(y.Default.NameID, y.Default.Number)]]++
 				}
 			case *ir.Jmp:
 				if x.Cond {
 					break
 				}
 
-				n := int(x.NameID)
-				if n == 0 {
-					n = -x.Number
-				}
-				g.labels[n]++
+				g.lblUsed[g.labels[label2(x.NameID, x.Number)]]++
 			}
 		}
 	}
@@ -600,6 +581,15 @@ func (g *gen) shift(n *exprNode) {
 	}
 	g.w("uint")
 	g.expression(n.Childs[1], false)
+}
+
+func (g *gen) label(nm ir.NameID, n int) {
+	switch m := g.labels[label2(nm, n)]; {
+	case m > 0:
+		g.w("_%v", ir.NameID(m))
+	default:
+		g.w("_%v", -m)
+	}
 }
 
 func (g *gen) expression(n *exprNode, void bool) bool { return g.expression2(n, void, 0) }
@@ -814,10 +804,14 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 			g.w(")")
 		default:
 			if x.Address {
-				off := g.model.Layout(t)[x.Index].Offset
-				g.w("(*%v)(unsafe.Pointer(uintptr(", g.typ(ft))
-				g.convert(e, idVoidPtr)
-				g.w(")+uintptr(%v/* X%v */)))", off, x.Index)
+				g.w("(*%v)(unsafe.Pointer(&(", g.typ(ft))
+				g.expression(e, false)
+				g.w(".X%v)))", x.Index)
+				//TODO pr44555.c
+				//TODO off := g.model.Layout(t)[x.Index].Offset
+				//TODO g.w("(*%v)(unsafe.Pointer(uintptr(", g.typ(ft))
+				//TODO g.convert(e, idVoidPtr)
+				//TODO g.w(")+uintptr(%v/* X%v */)))", off, x.Index)
 				return false
 			}
 
@@ -856,19 +850,14 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 			g.w("if")
 			g.expression(n.Childs[0], false)
 			g.w("== 0 {")
-			g.labels[l]--
+			g.lblUsed[g.labels[l]]--
 			return true
 		}
 
 		g.w("if")
 		g.expression(n.Childs[0], false)
 		g.w("!= 0 { goto ")
-		switch {
-		case x.NameID != 0:
-			TODO("%s", x.Pos())
-		default:
-			g.w("_%v", x.Number)
-		}
+		g.label(x.NameID, x.Number)
 		g.w("}")
 	case *ir.Jz:
 		l := int(x.NameID)
@@ -879,19 +868,14 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 			g.w("if")
 			g.expression(n.Childs[0], false)
 			g.w("!= 0 {")
-			g.labels[l]--
+			g.lblUsed[g.labels[l]]--
 			return true
 		}
 
 		g.w("if")
 		g.expression(n.Childs[0], false)
 		g.w("== 0 { goto ")
-		switch {
-		case x.NameID != 0:
-			g.w("_%v", x.NameID)
-		default:
-			g.w("_%v", x.Number)
-		}
+		g.label(x.NameID, x.Number)
 		g.w("}")
 	case *ir.Label:
 		if x.Cond {
@@ -1196,21 +1180,12 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 			g.w("case ")
 			g.value(x.Pos(), x.TypeID, v.Value)
 			g.w(": goto ")
-			switch l := v.Label; {
-			case l.NameID != 0:
-				TODO("%s", x.Pos())
-			default:
-				g.w("_%v\n", l.Number)
-			}
+			g.label(v.Label.NameID, v.Label.Number)
+			g.w("\n")
 		}
 		g.w("default: goto ")
-		switch l := x.Default; {
-		case l.NameID != 0:
-			TODO("%s", x.Pos())
-		default:
-			g.w("_%v\n", l.Number)
-		}
-		g.w("}\n")
+		g.label(x.Default.NameID, x.Default.Number)
+		g.w("\n}\n")
 	case
 		*ir.Add,
 		*ir.And,
@@ -1403,23 +1378,15 @@ func (g *gen) emit(n *node, lastVoid bool, nextLabel int) {
 			g.w("\n")
 		case *ir.Jmp:
 			g.w("goto ")
-			switch {
-			case x.NameID != 0:
-				g.w("_%v\n", x.NameID)
-			default:
-				g.w("_%v\n", x.Number)
-			}
+			g.label(x.NameID, x.Number)
+			g.w("\n")
 		case *ir.Label:
-			if g.labels[label(x)] == 0 {
+			if g.lblUsed[label(x)] == 0 {
 				break
 			}
 
-			switch {
-			case x.NameID != 0:
-				g.w("_%v:\n", x.NameID)
-			default:
-				g.w("_%v:\n", x.Number)
-			}
+			g.label(x.NameID, x.Number)
+			g.w(":\n")
 		case *ir.Return:
 			if i != len(n.Ops)-1 || !lastVoid {
 				g.w("return\n")
