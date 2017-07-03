@@ -1093,7 +1093,7 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 			g.w("; *p =")
 			g.expression(n.Childs[1], false)
 			g.sinks[n.Childs[1].TypeID] = struct{}{}
-			g.w("; sink%d = *p }", g.reg(n.Childs[1].TypeID))
+			g.w("; sink%d(*p) }", g.reg(n.Childs[1].TypeID))
 		case x.Bits != 0 && !void && !asop:
 			m := (uint64(1)<<uint(x.Bits) - 1) << uint(x.BitOffset)
 			g.storebits[x.TypeID] = struct{}{}
@@ -1898,7 +1898,7 @@ func (g *gen) gen() error {
 	g.w("var nzf32 float32 // -0.0\n")
 	g.w("var nzf64 float64 // -0.0\n")
 	for _, v := range g.helpers(g.sinks) {
-		g.w("var sink%d %v//TODO report GC bug\n", g.reg(v.TypeID), g.typ2(v.TypeID))
+		g.w("func sink%d(%v) {} //TODO report GC bug\n", g.reg(v.TypeID), g.typ2(v.TypeID))
 	}
 	for _, v := range g.helpers(g.copies) {
 		g.w("func copy%d(d, s *%[2]v) *%[2]v { *d = *s; return d }\n", g.reg(v.TypeID), g.typ2(v.TypeID))
