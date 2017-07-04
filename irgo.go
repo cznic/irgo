@@ -882,6 +882,10 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 			if void {
 				switch n.Childs[1].Op.(type) {
 				case *ir.Const32:
+					if n.Childs[1].Comma != nil {
+						break
+					}
+
 					//TODO The func() wrapper bypasses an internal compiler error (fixed in Go1.9.)
 					g.w("func() { if ")
 					g.expression(n.Childs[0], false)
