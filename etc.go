@@ -909,3 +909,12 @@ func isIntegalType(t ir.TypeID) bool {
 	}
 	return false
 }
+
+func isConst(n *exprNode) bool {
+	switch n.Op.(type) {
+	case *ir.Const32, *ir.Const64:
+		return true
+	default:
+		return false
+	}
+}

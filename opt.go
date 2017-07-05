@@ -5,6 +5,7 @@
 // +build !irgo.noopt
 
 //TODO TCC 21_: crt.Xprintf(tls, str(20), unsafe.Pointer((*int8)(unsafe.Pointer(&_destarray))))
+//TODO P2U(U2P(x))
 
 package irgo
 
