@@ -1388,16 +1388,9 @@ func (g *gen) convert2(e *exprNode, from, to ir.TypeID) {
 	case t.Kind() == ir.Pointer:
 		switch {
 		case isIntegalType(from):
-			switch {
-			case isConst(e):
-				g.w("%s.U2P(uintptr", crt)
-				g.expression(e, false)
-				g.w(")")
-			default:
-				g.w("unsafe.Pointer(uintptr")
-				g.expression(e, false)
-				g.w(")")
-			}
+			g.w("%s.U2P(uintptr", crt)
+			g.expression(e, false)
+			g.w(")")
 		default:
 			g.w("unsafe.Pointer")
 			g.expression(e, false)
