@@ -1386,14 +1386,15 @@ func (g *gen) convert2(e *exprNode, from, to ir.TypeID) {
 
 				// *(*t)(unsafe.Pointer(&struct{f uintptr}{e}))
 				g.w("*(*%v)(unsafe.Pointer(&struct{f uintptr}{%v}))", g.typ(t), uintptr(y.Value))
-				return
+			case *ir.Convert:
+				g.convert2(e.Childs[0], from, to)
 			default:
-				// *(*t)(unsafe.Pointer(&struct{f t0}{e}))
-				g.w("*(*%v)(unsafe.Pointer(&struct{f %v}{", g.typ(t), g.typ2(e.TypeID))
+				// func() t { v := e; return *(*t)(unsafe.Pointer(&v)) }()
+				g.w("func() %v { v := ", g.typ(t))
 				g.expression(e, false)
-				g.w("}))")
-				return
+				g.w("; return *(*%v)(unsafe.Pointer(&v)) }()", g.typ(t))
 			}
+			return
 		}
 	}
 
