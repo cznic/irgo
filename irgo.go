@@ -692,12 +692,20 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 		g.w("(%s)", g.mangle(g.f.f.Arguments[x.Index], false, -1))
 	case *ir.Bool:
 		g.w("bool2int(")
-		t := g.tc.MustType(n.Childs[0].TypeID)
-		g.expression(n.Childs[0], false)
+		e := n.Childs[0]
+	more:
+		t := g.tc.MustType(e.TypeID)
 		switch {
 		case t.Kind() == ir.Pointer:
+			if x, ok := e.Op.(*ir.Convert); ok && g.tc.MustType(x.TypeID).Kind() == ir.Pointer && e.Comma == nil {
+				e = e.Childs[0]
+				goto more
+			}
+
+			g.expression(e, false)
 			g.w("!= nil")
 		default:
+			g.expression(e, false)
 			g.w("!= 0")
 		}
 		g.w(")")
@@ -1004,7 +1012,30 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 		case g.tc.MustType(x.TypeID).Kind() == ir.Pointer:
 			g.w(", %v)", x.Delta)
 		default:
-			g.w(", %v(%v))", g.typ2(x.TypeID), x.Delta)
+			switch x.TypeID {
+			case idInt8:
+				g.w(", %v)", int8(x.Delta))
+			case idUint8:
+				g.w(", byte(%v))", uint8(x.Delta))
+			case idInt16:
+				g.w(", %v)", int16(x.Delta))
+			case idUint16:
+				g.w(", uint16(%v))", uint16(x.Delta))
+			case idInt32:
+				g.w(", %v)", int32(x.Delta))
+			case idUint32:
+				g.w(", uint32(%v))", uint32(x.Delta))
+			case idInt64:
+				g.w(", %v)", int64(x.Delta))
+			case idUint64:
+				g.w(", uint64(%v))", uint64(x.Delta))
+			case idFloat32:
+				g.w(", %v)", float32(x.Delta))
+			case idFloat64:
+				g.w(", %v)", float64(x.Delta))
+			default:
+				TODO("%s: %v", x.Pos(), x.TypeID)
+			}
 		}
 	case *ir.PreIncrement:
 		if void {
@@ -1051,9 +1082,13 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 			case idUint32:
 				g.w(", uint32(%v))", uint32(x.Delta))
 			case idInt64:
-				g.w(", %v)", int32(x.Delta))
+				g.w(", %v)", int64(x.Delta))
 			case idUint64:
-				g.w(", uint64(%v))", uint32(x.Delta))
+				g.w(", uint64(%v))", uint64(x.Delta))
+			case idFloat32:
+				g.w(", %v)", float32(x.Delta))
+			case idFloat64:
+				g.w(", %v)", float64(x.Delta))
 			default:
 				TODO("%s: %v", x.Pos(), x.TypeID)
 			}

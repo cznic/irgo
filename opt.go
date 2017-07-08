@@ -270,13 +270,17 @@ func (o *opt) expr(n *ast.Expr) {
 			*n = y
 		case *ast.ParenExpr:
 			x.X = y.X
+		case *ast.SelectorExpr:
+			switch y.X.(type) {
+			case *ast.Ident:
+				*n = y
+			}
 		case *ast.UnaryExpr:
 			switch y.Op {
 			case token.AND:
 				*n = y
 			}
 		}
-
 	case *ast.SelectorExpr:
 		o.expr(&x.X)
 		switch y := x.X.(type) {
