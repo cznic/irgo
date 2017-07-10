@@ -290,7 +290,7 @@ func (g *gen) typ0(buf *buffer.Bytes, t ir.Type, full bool) {
 		fmt.Fprintf(buf, "func(*%s.TLS", crt)
 		for _, v := range ft.Arguments {
 			buf.WriteString(", ")
-			g.typ0(buf, v, full)
+			g.typ0(buf, v, false)
 		}
 		if ft.Variadic {
 			buf.WriteString(", ...interface{}")
@@ -300,7 +300,7 @@ func (g *gen) typ0(buf *buffer.Bytes, t ir.Type, full bool) {
 		case 0:
 			// nop
 		case 1:
-			g.typ0(buf, ft.Results[0], full)
+			g.typ0(buf, ft.Results[0], false)
 		default:
 			TODO("")
 		}
