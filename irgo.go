@@ -202,10 +202,12 @@ func (g *gen) w(msg string, arg ...interface{}) {
 }
 
 func (g *gen) typ0(buf *buffer.Bytes, t ir.Type, full bool) {
-	if v, ok := g.tm[t.ID()]; ok {
-		buf.WriteString(v)
-		buf.WriteByte(' ')
-		return
+	if !full {
+		if v, ok := g.tm[t.ID()]; ok {
+			buf.WriteString(v)
+			buf.WriteByte(' ')
+			return
+		}
 	}
 
 	switch t.Kind() {
@@ -237,13 +239,13 @@ func (g *gen) typ0(buf *buffer.Bytes, t ir.Type, full bool) {
 		at := t.(*ir.ArrayType)
 		n := at.Items
 		fmt.Fprintf(buf, "[%v]", n)
-		g.typ0(buf, at.Item, true)
+		g.typ0(buf, at.Item, false)
 	case ir.Struct:
 		if full {
 			buf.WriteString("struct{")
 			for i, v := range t.(*ir.StructOrUnionType).Fields {
 				fmt.Fprintf(buf, "X%v ", i)
-				g.typ0(buf, v, full)
+				g.typ0(buf, v, false)
 				buf.WriteByte(';')
 			}
 			buf.WriteString("}")
@@ -257,7 +259,7 @@ func (g *gen) typ0(buf *buffer.Bytes, t ir.Type, full bool) {
 			buf.WriteString("struct{X [0]struct{")
 			for i, v := range t.(*ir.StructOrUnionType).Fields {
 				fmt.Fprintf(buf, "X%v ", i)
-				g.typ0(buf, v, full)
+				g.typ0(buf, v, false)
 				buf.WriteByte(';')
 			}
 			fmt.Fprintf(buf, "}; U [%v]byte", g.model.Sizeof(t))
@@ -282,7 +284,7 @@ func (g *gen) typ0(buf *buffer.Bytes, t ir.Type, full bool) {
 		if e.Kind() != ir.Function {
 			buf.WriteByte('*')
 		}
-		g.typ0(buf, e, full)
+		g.typ0(buf, e, false)
 	case ir.Function:
 		ft := t.(*ir.FunctionType)
 		fmt.Fprintf(buf, "func(*%s.TLS", crt)
@@ -2100,30 +2102,34 @@ func (g *gen) gen() error {
 	for _, v := range g.helpers(g.stores) {
 		g.w("func store%d(p *%[2]v, v %[2]v) %[2]v { *p = v; return v }\n", g.reg(v.TypeID), g.typ2(v.TypeID))
 	}
-	for k := range g.tm {
-		delete(g.types, k)
-	}
+	defined := map[ir.TypeID]struct{}{}
 	var a []int
 	for k, v := range g.tm {
+		defined[k] = struct{}{}
 		if !strings.Contains(v, ".") {
 			a = append(a, int(k))
 		}
 	}
 	sort.Ints(a)
-	tm := g.tm
-	g.tm = nil
 	for _, v := range a {
 		id := ir.TypeID(v)
-		g.w("\ntype %s %v // t%d %v\n", tm[id], g.fullType(id), g.reg(id), id)
+		g.w("\ntype %s %v // t%d %v\n", g.tm[id], g.fullType(id), g.reg(id), id)
 	}
+more:
 	a = a[:0]
 	for k := range g.types {
-		a = append(a, int(k))
+		if _, ok := defined[k]; !ok {
+			a = append(a, int(k))
+		}
 	}
 	sort.Ints(a)
 	for _, v := range a {
 		id := ir.TypeID(v)
 		g.w("\ntype t%d %v // %v\n", g.reg(id), g.fullType(id), id)
+		defined[id] = struct{}{}
+	}
+	if len(a) != 0 {
+		goto more
 	}
 	if g.strings.Len() != 0 {
 		g.w("func str(n int) *int8 { return (*int8)(unsafe.Pointer(&strTab[n]))}\n")
