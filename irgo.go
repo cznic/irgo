@@ -842,15 +842,32 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 			g.w(")")
 		default:
 			if x.Address {
-				g.w("(*%v)(unsafe.Pointer(&(", g.typ(ft))
-				g.expression(e, false)
-				g.w(".X%v)))", x.Index)
-				//TODO pr44555.c
-				//TODO off := g.model.Layout(t)[x.Index].Offset
-				//TODO g.w("(*%v)(unsafe.Pointer(uintptr(", g.typ(ft))
-				//TODO g.convert(e, idVoidPtr)
-				//TODO g.w(")+uintptr(%v/* X%v */)))", off, x.Index)
-				return false
+				switch ft.Kind() {
+				case
+					ir.Complex128,
+					ir.Complex64,
+					ir.Float32,
+					ir.Float64,
+					ir.Int16,
+					ir.Int32,
+					ir.Int64,
+					ir.Int8,
+					ir.Uint16,
+					ir.Uint32,
+					ir.Uint64,
+					ir.Uint8:
+					g.w("&")
+				default:
+					g.w("(*%v)(unsafe.Pointer(&(", g.typ(ft))
+					g.expression(e, false)
+					g.w(".X%v)))", x.Index)
+					//TODO pr44555.c
+					//TODO off := g.model.Layout(t)[x.Index].Offset
+					//TODO g.w("(*%v)(unsafe.Pointer(uintptr(", g.typ(ft))
+					//TODO g.convert(e, idVoidPtr)
+					//TODO g.w(")+uintptr(%v/* X%v */)))", off, x.Index)
+					return false
+				}
 			}
 
 			g.w("(")
