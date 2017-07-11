@@ -844,6 +844,7 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 			if x.Address {
 				switch ft.Kind() {
 				case
+					ir.Array,
 					ir.Complex128,
 					ir.Complex64,
 					ir.Float32,
