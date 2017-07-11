@@ -86,6 +86,7 @@ func newFn(tc ir.TypeCache, f *ir.FunctionDefinition) *fn {
 type gen struct {
 	builtins  map[int]struct{} // Object#
 	copies    map[ir.TypeID]struct{}
+	elems     map[ir.TypeID]struct{}
 	f         *fn
 	fns       map[ir.NameID]*ir.FunctionDefinition
 	labels    map[int]int
@@ -115,6 +116,7 @@ func newGen(obj []ir.Object, tm map[ir.TypeID]string) *gen {
 	g := &gen{
 		builtins:  map[int]struct{}{},
 		copies:    map[ir.TypeID]struct{}{},
+		elems:     map[ir.TypeID]struct{}{},
 		fns:       map[ir.NameID]*ir.FunctionDefinition{},
 		mangled:   map[cname]ir.NameID{},
 		model:     model,
@@ -837,20 +839,19 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 			}
 			nfo.r++
 		}
-		t := g.tc.MustType(x.TypeID)
-		s := "+"
+		s := ""
 		if x.Neg {
 			s = "-"
 		}
-		sz := g.model.Sizeof(t.(*ir.PointerType).Element)
+		g.elems[x.TypeID] = struct{}{}
 		if !x.Address {
 			g.w("*")
 		}
-		g.w("(%v)(unsafe.Pointer(uintptr(", g.typ(t))
-		g.convert(n.Childs[0], idVoidPtr)
-		g.w(")%s%v*uintptr", s, sz)
+		g.w("elem%v(", g.reg(x.TypeID))
+		g.expression(n.Childs[0], false)
+		g.w(", %suintptr", s)
 		g.expression(n.Childs[1], false)
-		g.w("))")
+		g.w(")")
 	case *ir.Field:
 		e := n.Childs[0]
 		if x, ok := e.Op.(*ir.Variable); ok {
@@ -2045,6 +2046,11 @@ func (g *gen) gen() error {
 	g.w("var nzf64 float64 // -0.0\n")
 	for _, v := range g.helpers(g.copies) {
 		g.w("func copy%d(d, s *%[2]v) *%[2]v { *d = *s; return d }\n", g.reg(v.TypeID), g.typ2(v.TypeID))
+	}
+	for _, v := range g.helpers(g.elems) {
+		t := g.tc.MustType(v.TypeID)
+		sz := g.model.Sizeof(t.(*ir.PointerType).Element)
+		g.w("func elem%d(a %[2]v, index uintptr) %[2]v { return (%[2]v)(unsafe.Pointer(uintptr(unsafe.Pointer(a))+%[3]v*index)) }\n", g.reg(v.TypeID), g.typ2(v.TypeID), sz)
 	}
 	for _, v := range g.helpers(g.postIncs) {
 		switch {
