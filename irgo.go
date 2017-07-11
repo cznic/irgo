@@ -1799,7 +1799,7 @@ func (g *gen) value(pos token.Position, id ir.TypeID, v ir.Value) {
 			g.w("%v{", g.typ(t))
 			if !isZeroValue(x) {
 				for i, v := range x.Values {
-					if v == nil {
+					if isZeroValue(v) {
 						continue
 					}
 
