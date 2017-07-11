@@ -721,6 +721,10 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 		ft := g.tc.MustType(fp.TypeID).(*ir.PointerType).Element.(*ir.FunctionType)
 		g.call(ft, n.Childs[1:])
 	case *ir.Const32:
+		if void {
+			break
+		}
+
 		switch t := g.tc.MustType(x.TypeID); t.Kind() {
 		case ir.Pointer:
 			switch {
@@ -751,6 +755,10 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 			TODO("%s: %v", x.Pos(), x.TypeID)
 		}
 	case *ir.Const64:
+		if void {
+			break
+		}
+
 		switch x.TypeID {
 		case idComplex64:
 			g.w("complex(float32(%v), 0) ", math.Float64frombits(uint64(x.Value)))
@@ -812,6 +820,14 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 	case *ir.Drop:
 		g.expression(n.Childs[0], true)
 	case *ir.Element:
+		if x, ok := n.Childs[0].Op.(*ir.Variable); ok {
+			nfo := &g.f.varNfo[x.Index]
+			sc := nfo.scope
+			if sc == 0 {
+				sc = -1
+			}
+			nfo.r++
+		}
 		t := g.tc.MustType(x.TypeID)
 		s := "+"
 		if x.Neg {
@@ -828,6 +844,14 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 		g.w("))")
 	case *ir.Field:
 		e := n.Childs[0]
+		if x, ok := e.Op.(*ir.Variable); ok {
+			nfo := &g.f.varNfo[x.Index]
+			sc := nfo.scope
+			if sc == 0 {
+				sc = -1
+			}
+			nfo.r++
+		}
 		t := g.tc.MustType(x.TypeID).(*ir.PointerType).Element.(*ir.StructOrUnionType)
 		ft := t.Fields[x.Index]
 		switch t.Kind() {
