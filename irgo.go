@@ -1182,27 +1182,12 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 		case x.Bits == 0 && void && asop:
 			e := n.Childs[1]
 			switch x := e.Op.(type) {
-			case *ir.Add:
-				g.w("*")
-				g.expression(n.Childs[0].Childs[0], false)
-				g.w("+=")
-				g.expression(e.Childs[1], false)
-			case *ir.And:
-				g.w("*")
-				g.expression(n.Childs[0].Childs[0], false)
-				g.w("&=")
-				g.expression(e.Childs[1], false)
 			case *ir.Convert:
 				g.w("{ p := ")
 				g.expression(n.Childs[0].Childs[0], false)
 				g.w("; *p =")
 				g.expression(n.Childs[1], false)
 				g.w(" }")
-			case *ir.Div:
-				g.w("*")
-				g.expression(n.Childs[0].Childs[0], false)
-				g.w("/=")
-				g.expression(e.Childs[1], false)
 			case *ir.Element:
 				if !x.Address {
 					TODO("%s", x.Position)
@@ -1225,39 +1210,34 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 				g.w("<<=uint(")
 				g.expression(e.Childs[1], false)
 				g.w(")")
-			case *ir.Mul:
-				g.w("*")
-				g.expression(n.Childs[0].Childs[0], false)
-				g.w("*=")
-				g.expression(e.Childs[1], false)
-			case *ir.Or:
-				g.w("*")
-				g.expression(n.Childs[0].Childs[0], false)
-				g.w("|=")
-				g.expression(e.Childs[1], false)
-			case *ir.Rem:
-				g.w("*")
-				g.expression(n.Childs[0].Childs[0], false)
-				g.w("%%=")
-				g.expression(e.Childs[1], false)
 			case *ir.Rsh:
 				g.w("*")
 				g.expression(n.Childs[0].Childs[0], false)
 				g.w(">>=uint(")
 				g.expression(e.Childs[1], false)
 				g.w(")")
-			case *ir.Sub:
-				g.w("*")
-				g.expression(n.Childs[0].Childs[0], false)
-				g.w("-=")
-				g.expression(e.Childs[1], false)
-			case *ir.Xor:
-				g.w("*")
-				g.expression(n.Childs[0].Childs[0], false)
-				g.w("^=")
-				g.expression(e.Childs[1], false)
 			default:
-				TODO("%s: %T", n.Op.Pos(), x)
+				g.w("*")
+				g.expression(n.Childs[0].Childs[0], false)
+				switch e.Op.(type) {
+				case *ir.Add:
+					g.w("+=")
+				case *ir.And:
+					g.w("&=")
+				case *ir.Div:
+					g.w("/=")
+				case *ir.Mul:
+					g.w("*=")
+				case *ir.Or:
+					g.w("|=")
+				case *ir.Rem:
+					g.w("%%=")
+				case *ir.Sub:
+					g.w("-=")
+				case *ir.Xor:
+					g.w("^=")
+				}
+				g.expression(e.Childs[1], false)
 			}
 		case x.Bits != 0 && !void && !asop:
 			m := (uint64(1)<<uint(x.Bits) - 1) << uint(x.BitOffset)
