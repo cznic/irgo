@@ -1183,7 +1183,7 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 			}
 		case x.Bits == 0 && void && asop:
 			e := n.Childs[1]
-			switch e.Op.(type) {
+			switch x := e.Op.(type) {
 			case *ir.Add:
 				g.w("*")
 				g.expression(n.Childs[0].Childs[0], false)
@@ -1199,6 +1199,22 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 				g.expression(n.Childs[0].Childs[0], false)
 				g.w("/=")
 				g.expression(e.Childs[1], false)
+			case *ir.Element:
+				if !x.Address {
+					TODO("%s", x.Position)
+				}
+
+				t := g.tc.MustType(x.TypeID)
+				sz := g.model.Sizeof(t.(*ir.PointerType).Element)
+				s := "+"
+				if x.Neg {
+					s = "-"
+				}
+				g.w("*(*uintptr)(unsafe.Pointer")
+				g.expression(n.Childs[0].Childs[0], false)
+				g.w(") %s= %v*uintptr(", s, sz)
+				g.expression(e.Childs[1], false)
+				g.w(")")
 			case *ir.Lsh:
 				g.w("*")
 				g.expression(n.Childs[0].Childs[0], false)
@@ -1240,6 +1256,7 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 				g.w("{ p := ")
 				g.expression(n.Childs[0].Childs[0], false)
 				g.w("; *p =")
+				//TODO- g.w("/*TODO1243 %T */", n.Childs[1].Op)
 				g.expression(n.Childs[1], false)
 				g.sinks[n.Childs[1].TypeID] = struct{}{}
 				g.w("; sink%d(*p) }", g.reg(n.Childs[1].TypeID))
