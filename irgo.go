@@ -410,6 +410,14 @@ func (g *gen) collectLabels(nodes []*node) {
 func (g *gen) call(ft *ir.FunctionType, args []*exprNode) {
 	g.w("(tls")
 	for i, v := range args {
+		if x, ok := v.Op.(*ir.Variable); ok {
+			nfo := &g.f.varNfo[x.Index]
+			sc := nfo.scope
+			if sc == 0 {
+				sc = -1
+			}
+			nfo.r++
+		}
 		g.w(", ")
 		var pt ir.Type
 		if i < len(ft.Arguments) {
