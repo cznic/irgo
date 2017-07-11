@@ -96,7 +96,6 @@ type gen struct {
 	out       *buffer.Bytes
 	postIncs  map[ir.TypeID]struct{}
 	preIncs   map[ir.TypeID]struct{}
-	sinks     map[ir.TypeID]struct{}
 	stable    map[ir.TypeID]int
 	storebits map[ir.TypeID]struct{}
 	stores    map[ir.TypeID]struct{}
@@ -123,7 +122,6 @@ func newGen(obj []ir.Object, tm map[ir.TypeID]string) *gen {
 		out:       &buffer.Bytes{},
 		postIncs:  map[ir.TypeID]struct{}{},
 		preIncs:   map[ir.TypeID]struct{}{},
-		sinks:     map[ir.TypeID]struct{}{},
 		stable:    map[ir.TypeID]int{},
 		storebits: map[ir.TypeID]struct{}{},
 		stores:    map[ir.TypeID]struct{}{},
@@ -1194,6 +1192,12 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 				g.expression(n.Childs[0].Childs[0], false)
 				g.w("&=")
 				g.expression(e.Childs[1], false)
+			case *ir.Convert:
+				g.w("{ p := ")
+				g.expression(n.Childs[0].Childs[0], false)
+				g.w("; *p =")
+				g.expression(n.Childs[1], false)
+				g.w(" }")
 			case *ir.Div:
 				g.w("*")
 				g.expression(n.Childs[0].Childs[0], false)
@@ -1253,13 +1257,7 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 				g.w("^=")
 				g.expression(e.Childs[1], false)
 			default:
-				g.w("{ p := ")
-				g.expression(n.Childs[0].Childs[0], false)
-				g.w("; *p =")
-				//TODO- g.w("/*TODO1243 %T */", n.Childs[1].Op)
-				g.expression(n.Childs[1], false)
-				g.sinks[n.Childs[1].TypeID] = struct{}{}
-				g.w("; sink%d(*p) }", g.reg(n.Childs[1].TypeID))
+				TODO("%s: %T", n.Op.Pos(), x)
 			}
 		case x.Bits != 0 && !void && !asop:
 			m := (uint64(1)<<uint(x.Bits) - 1) << uint(x.BitOffset)
@@ -2065,9 +2063,6 @@ func (g *gen) gen() error {
 	g.w("var inf = math.Inf(1)\n")
 	g.w("var nzf32 float32 // -0.0\n")
 	g.w("var nzf64 float64 // -0.0\n")
-	for _, v := range g.helpers(g.sinks) {
-		g.w("func sink%d(%v) {} //TODO report GC bug\n", g.reg(v.TypeID), g.typ2(v.TypeID))
-	}
 	for _, v := range g.helpers(g.copies) {
 		g.w("func copy%d(d, s *%[2]v) *%[2]v { *d = *s; return d }\n", g.reg(v.TypeID), g.typ2(v.TypeID))
 	}
