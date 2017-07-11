@@ -858,6 +858,13 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 					ir.Uint64,
 					ir.Uint8:
 					g.w("&")
+				case ir.Pointer:
+					if ft.ID() == idVoidPtr {
+						g.w("&")
+						break
+					}
+
+					fallthrough
 				default:
 					g.w("(*%v)(unsafe.Pointer(&(", g.typ(ft))
 					g.expression(e, false)
