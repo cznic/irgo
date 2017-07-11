@@ -1182,12 +1182,68 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 				g.w(")")
 			}
 		case x.Bits == 0 && void && asop:
-			g.w("{ p := ")
-			g.expression(n.Childs[0].Childs[0], false)
-			g.w("; *p =")
-			g.expression(n.Childs[1], false)
-			g.sinks[n.Childs[1].TypeID] = struct{}{}
-			g.w("; sink%d(*p) }", g.reg(n.Childs[1].TypeID))
+			e := n.Childs[1]
+			switch e.Op.(type) {
+			case *ir.Add:
+				g.w("*")
+				g.expression(n.Childs[0].Childs[0], false)
+				g.w("+=")
+				g.expression(e.Childs[1], false)
+			case *ir.And:
+				g.w("*")
+				g.expression(n.Childs[0].Childs[0], false)
+				g.w("&=")
+				g.expression(e.Childs[1], false)
+			case *ir.Div:
+				g.w("*")
+				g.expression(n.Childs[0].Childs[0], false)
+				g.w("/=")
+				g.expression(e.Childs[1], false)
+			case *ir.Lsh:
+				g.w("*")
+				g.expression(n.Childs[0].Childs[0], false)
+				g.w("<<=uint(")
+				g.expression(e.Childs[1], false)
+				g.w(")")
+			case *ir.Mul:
+				g.w("*")
+				g.expression(n.Childs[0].Childs[0], false)
+				g.w("*=")
+				g.expression(e.Childs[1], false)
+			case *ir.Or:
+				g.w("*")
+				g.expression(n.Childs[0].Childs[0], false)
+				g.w("|=")
+				g.expression(e.Childs[1], false)
+			case *ir.Rem:
+				g.w("*")
+				g.expression(n.Childs[0].Childs[0], false)
+				g.w("%%=")
+				g.expression(e.Childs[1], false)
+			case *ir.Rsh:
+				g.w("*")
+				g.expression(n.Childs[0].Childs[0], false)
+				g.w(">>=uint(")
+				g.expression(e.Childs[1], false)
+				g.w(")")
+			case *ir.Sub:
+				g.w("*")
+				g.expression(n.Childs[0].Childs[0], false)
+				g.w("-=")
+				g.expression(e.Childs[1], false)
+			case *ir.Xor:
+				g.w("*")
+				g.expression(n.Childs[0].Childs[0], false)
+				g.w("^=")
+				g.expression(e.Childs[1], false)
+			default:
+				g.w("{ p := ")
+				g.expression(n.Childs[0].Childs[0], false)
+				g.w("; *p =")
+				g.expression(n.Childs[1], false)
+				g.sinks[n.Childs[1].TypeID] = struct{}{}
+				g.w("; sink%d(*p) }", g.reg(n.Childs[1].TypeID))
+			}
 		case x.Bits != 0 && !void && !asop:
 			m := (uint64(1)<<uint(x.Bits) - 1) << uint(x.BitOffset)
 			g.storebits[x.TypeID] = struct{}{}
