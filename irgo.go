@@ -433,8 +433,7 @@ func (g *gen) call(ft *ir.FunctionType, args []*exprNode) {
 			case ir.Function:
 				g.expression(v, false)
 			default:
-				g.w("unsafe.Pointer")
-				g.expression(v, false)
+				g.convert(v, idVoidPtr)
 			}
 		case pt != nil:
 			g.convert(v, pt.ID())
