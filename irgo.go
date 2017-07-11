@@ -557,8 +557,8 @@ func (g *gen) binop(n *exprNode) {
 			g.w("uintptr")
 			g.expression(n.Childs[0].Childs[0], false)
 		default:
-			g.w("uintptr(unsafe.Pointer")
-			g.expression(n.Childs[0], false)
+			g.w("uintptr(")
+			g.convert(n.Childs[0], idVoidPtr)
 			g.w(")")
 		}
 		switch x := n.Op.(type) {
@@ -576,8 +576,8 @@ func (g *gen) binop(n *exprNode) {
 			g.w("uintptr")
 			g.expression(n.Childs[1].Childs[0], false)
 		default:
-			g.w("uintptr(unsafe.Pointer")
-			g.expression(n.Childs[1], false)
+			g.w("uintptr(")
+			g.convert(n.Childs[1], idVoidPtr)
 			g.w(")")
 		}
 		g.w("))")
