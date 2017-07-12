@@ -928,3 +928,18 @@ func isZeroExpr(n *exprNode) bool {
 		return false
 	}
 }
+
+func isConst(n *exprNode) bool {
+	if n.Comma != nil {
+		return false
+	}
+
+	switch n.Op.(type) {
+	case *ir.Const32, *ir.Const64, *ir.Nil:
+		return true
+	case *ir.Convert:
+		return isConst(n.Childs[0])
+	default:
+		return false
+	}
+}

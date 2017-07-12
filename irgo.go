@@ -632,8 +632,7 @@ func (g *gen) shift(n *exprNode) {
 	default:
 		TODO("%s: %T", n.Op.Pos(), x)
 	}
-	g.w("uint")
-	g.expression(n.Childs[1], false)
+	g.uint(n.Childs[1])
 }
 
 func (g *gen) label(nm ir.NameID, n int) {
@@ -642,6 +641,317 @@ func (g *gen) label(nm ir.NameID, n int) {
 		g.w("_%v", ir.NameID(m))
 	default:
 		g.w("_%v", -m)
+	}
+}
+
+func (g *gen) num(n *exprNode) interface{} {
+	switch x := n.Op.(type) {
+	case *ir.Const32:
+		switch x.TypeID {
+		case idInt8:
+			return int8(x.Value)
+		case idUint8:
+			return uint8(x.Value)
+		case idInt16:
+			return int16(x.Value)
+		case idUint16:
+			return uint16(x.Value)
+		case idInt32:
+			return x.Value
+		case idUint32:
+			return uint32(x.Value)
+		default:
+			TODO("%s: %v", x.Position, x.TypeID)
+		}
+	case *ir.Const64:
+		switch x.TypeID {
+		case idInt64:
+			return x.Value
+		case idUint64:
+			return uint64(x.Value)
+		case idFloat64:
+			return math.Float64frombits(uint64(x.Value))
+		default:
+			TODO("%s: %v", x.Position, x.TypeID)
+		}
+	case *ir.Convert:
+		to := g.tc.MustType(x.Result)
+		switch x := g.num(n.Childs[0]).(type) {
+		case int32:
+			switch to.Kind() {
+			case ir.Int32:
+				return x
+			default:
+				TODO("%s: internal error: %v", n.Op.Pos(), to)
+			}
+		case int64:
+			switch to.Kind() {
+			case ir.Int32:
+				return int32(x)
+			default:
+				TODO("%s: internal error: %v", n.Op.Pos(), to)
+			}
+		case uint32:
+			switch to.Kind() {
+			case ir.Int32:
+				return int32(x)
+			default:
+				TODO("%s: internal error: %v", n.Op.Pos(), to)
+			}
+		case uint64:
+			switch to.Kind() {
+			case ir.Int32:
+				return int32(x)
+			default:
+				TODO("%s: internal error: %v", n.Op.Pos(), to)
+			}
+		default:
+			TODO("%s: internal error: %T", n.Op.Pos(), x)
+		}
+	default:
+		TODO("%s: internal error: %T", x.Pos(), x)
+	}
+	panic("internal error")
+}
+
+func (g *gen) uint(n *exprNode) {
+	if isZeroExpr(n) {
+		g.w("0")
+		return
+	}
+
+	if !isConst(n) {
+		g.w("uint")
+		g.expression(n, false)
+		return
+	}
+
+	switch x := g.num(n).(type) {
+	case int32:
+		g.w("%v", x)
+	case int64:
+		g.w("%v", x)
+	default:
+		TODO("%s: %T", n.Op.Pos(), x)
+	}
+}
+
+func (g *gen) uintptr(n *exprNode) {
+	if isZeroExpr(n) {
+		g.w("0")
+		return
+	}
+
+	if !isConst(n) {
+		g.w("uintptr")
+		g.expression(n, false)
+		return
+	}
+
+	switch x := g.num(n).(type) {
+	case int32:
+		g.w("uintptr(%v)", uintptr(x))
+	case int64:
+		g.w("uintptr(%v)", uintptr(x))
+	case uint64:
+		g.w("uintptr(%v)", uintptr(x))
+	default:
+		TODO("%s: %T", n.Op.Pos(), x)
+	}
+}
+
+func (g *gen) int8(n *exprNode) {
+	switch x := g.num(n).(type) {
+	case int32:
+		g.w("int8(%v)", int8(x))
+	case uint32:
+		g.w("int8(%v)", int8(x))
+	case int64:
+		g.w("int8(%v)", int8(x))
+	case float64:
+		g.w("int8(%v)", int8(x))
+	default:
+		TODO("%s: %T", n.Op.Pos(), x)
+	}
+}
+
+func (g *gen) uint8(n *exprNode) {
+	switch x := g.num(n).(type) {
+	case int32:
+		g.w("uint8(%v)", uint8(x))
+	case int64:
+		g.w("uint8(%v)", uint8(x))
+	default:
+		TODO("%s: %T", n.Op.Pos(), x)
+	}
+}
+
+func (g *gen) int16(n *exprNode) {
+	switch x := g.num(n).(type) {
+	case int32:
+		g.w("int16(%v)", int16(x))
+	case int64:
+		g.w("int16(%v)", int16(x))
+	default:
+		TODO("%s: %T", n.Op.Pos(), x)
+	}
+}
+
+func (g *gen) uint16(n *exprNode) {
+	switch x := g.num(n).(type) {
+	case int32:
+		g.w("uint16(%v)", uint16(x))
+	case int64:
+		g.w("uint16(%v)", uint16(x))
+	case uint64:
+		g.w("uint16(%v)", uint16(x))
+	default:
+		TODO("%s: %T", n.Op.Pos(), x)
+	}
+}
+
+func (g *gen) int32(n *exprNode) {
+	switch x := g.num(n).(type) {
+	case int8:
+		g.w("int32(%v)", int32(x))
+	case uint8:
+		g.w("int32(%v)", int32(x))
+	case int16:
+		g.w("int32(%v)", int32(x))
+	case uint16:
+		g.w("int32(%v)", int32(x))
+	case int32:
+		g.w("int32(%v)", int32(x))
+	case uint32:
+		g.w("int32(%v)", int32(x))
+	case int64:
+		g.w("int32(%v)", int32(x))
+	case uint64:
+		g.w("int32(%v)", int32(x))
+	case float64:
+		g.w("int32(%v)", int32(x))
+	default:
+		TODO("%s: %T", n.Op.Pos(), x)
+	}
+}
+
+func (g *gen) uint32(n *exprNode) {
+	switch x := g.num(n).(type) {
+	case uint8:
+		g.w("uint32(%v)", uint32(x))
+	case uint16:
+		g.w("uint32(%v)", uint32(x))
+	case int32:
+		g.w("uint32(%v)", uint32(x))
+	case int64:
+		g.w("uint32(%v)", uint32(x))
+	case uint64:
+		g.w("uint32(%v)", uint32(x))
+	default:
+		TODO("%s: %T", n.Op.Pos(), x)
+	}
+}
+
+func (g *gen) int64(n *exprNode) {
+	switch x := g.num(n).(type) {
+	case int32:
+		g.w("int64(%v)", int64(x))
+	case uint32:
+		g.w("int64(%v)", int64(x))
+	case int64:
+		g.w("int64(%v)", int64(x))
+	case uint64:
+		g.w("int64(%v)", int64(x))
+	default:
+		TODO("%s: %T", n.Op.Pos(), x)
+	}
+}
+
+func (g *gen) uint64(n *exprNode) {
+	switch x := g.num(n).(type) {
+	case uint16:
+		g.w("uint64(%v)", uint64(x))
+	case int32:
+		g.w("uint64(%v)", uint64(x))
+	case uint32:
+		g.w("uint64(%v)", uint64(x))
+	case int64:
+		g.w("uint64(%v)", uint64(x))
+	default:
+		TODO("%s: %T", n.Op.Pos(), x)
+	}
+}
+
+func (g *gen) float32(n *exprNode) {
+	switch x := g.num(n).(type) {
+	case int32:
+		g.w("float32(%v)", float32(x))
+	case int64:
+		g.w("float32(%v)", float32(x))
+	case float64:
+		g.w("float32(%v)", float32(x))
+	default:
+		TODO("%s: %T", n.Op.Pos(), x)
+	}
+}
+
+func (g *gen) float64(n *exprNode) {
+	switch x := g.num(n).(type) {
+	case int32:
+		g.w("%v", float64(x))
+	case int64:
+		g.w("%v", float64(x))
+	default:
+		TODO("%s: %T", n.Op.Pos(), x)
+	}
+}
+
+func (g *gen) complex64(n *exprNode) {
+	switch x := g.num(n).(type) {
+	case int32:
+		g.w("complex(float32(%v), 0) ", x)
+	default:
+		TODO("%s: %T", n.Op.Pos(), x)
+	}
+}
+
+func (g *gen) convConst(to ir.TypeID, n *exprNode) {
+	if isZeroExpr(n) {
+		switch {
+		case g.tc.MustType(to).Kind() == ir.Pointer:
+			g.w("nil")
+		default:
+			g.w("0")
+		}
+		return
+	}
+
+	switch to {
+	case idUint8:
+		g.uint8(n)
+	case idInt8:
+		g.int8(n)
+	case idInt16:
+		g.int16(n)
+	case idUint16:
+		g.uint16(n)
+	case idInt32:
+		g.int32(n)
+	case idUint32:
+		g.uint32(n)
+	case idInt64:
+		g.int64(n)
+	case idUint64:
+		g.uint64(n)
+	case idFloat32:
+		g.float32(n)
+	case idFloat64:
+		g.float64(n)
+	case idComplex64:
+		g.complex64(n)
+	default:
+		TODO("%s: internal error: %v", n.Op.Pos(), to)
+		panic("internal error")
 	}
 }
 
@@ -767,7 +1077,7 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 		case ir.Uint16:
 			g.w("u16(%v) ", uint16(x.Value))
 		case ir.Int32:
-			g.w("i32(%v) ", x.Value)
+			g.w("int32(%v) ", x.Value)
 		case ir.Uint32:
 			g.w("u32(%v) ", uint32(x.Value))
 		case ir.Int64:
@@ -806,7 +1116,7 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 		case idUint16:
 			g.w("u16(%v) ", uint16(x.Value))
 		case idInt32:
-			g.w("i32(%v) ", int32(x.Value))
+			g.w("int32(%v) ", int32(x.Value))
 		case idUint32:
 			g.w("u32(%v) ", uint32(x.Value))
 		case idInt64:
@@ -821,6 +1131,12 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 		if void && e.TypeID != idVaList {
 			g.expression(e, true)
 			return false
+		}
+
+		to := g.tc.MustType(x.Result)
+		if isConst(e) && x.Result != idVaList && to.Kind() != ir.Pointer {
+			g.convConst(x.Result, e)
+			break
 		}
 
 		g.convert2(e, x.TypeID, x.Result)
@@ -863,8 +1179,8 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 		}
 		g.w("elem%v(", g.reg(x.TypeID))
 		g.expression(n.Childs[0], false)
-		g.w(", %suintptr", s)
-		g.expression(n.Childs[1], false)
+		g.w(", %s", s)
+		g.uintptr(n.Childs[1])
 		g.w(")")
 	case *ir.Field:
 		e := n.Childs[0]
@@ -1233,15 +1549,13 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 			case *ir.Lsh:
 				g.w("*")
 				g.expression(n.Childs[0].Childs[0], false)
-				g.w("<<=uint(")
-				g.expression(e.Childs[1], false)
-				g.w(")")
+				g.w("<<=")
+				g.uint(e.Childs[1])
 			case *ir.Rsh:
 				g.w("*")
 				g.expression(n.Childs[0].Childs[0], false)
-				g.w(">>=uint(")
-				g.expression(e.Childs[1], false)
-				g.w(")")
+				g.w(">>=")
+				g.uint(e.Childs[1])
 			default:
 				g.w("*")
 				g.expression(n.Childs[0].Childs[0], false)
@@ -1876,7 +2190,7 @@ func (g *gen) value(pos token.Position, id ir.TypeID, v ir.Value) {
 		case ir.Uint16:
 			g.w("u16(%v)", uint16(x.Value))
 		case ir.Int32:
-			g.w("i32(%v)", x.Value)
+			g.w("int32(%v)", x.Value)
 		case ir.Uint32:
 			g.w("u32(%v)", uint32(x.Value))
 		case ir.Int64:
@@ -1908,7 +2222,7 @@ func (g *gen) value(pos token.Position, id ir.TypeID, v ir.Value) {
 		case ir.Uint16:
 			g.w("u16(%v)", uint16(x.Value))
 		case ir.Int32:
-			g.w("i32(%v)", int32(x.Value))
+			g.w("int32(%v)", int32(x.Value))
 		case ir.Uint32:
 			g.w("u32(%v)", uint32(x.Value))
 		case ir.Int64:
@@ -2049,7 +2363,6 @@ func (g *gen) gen() error {
 	g.w("func bool2int(b bool) int32 { if b { return 1}; return 0 }\n")
 	g.w("func bug20530(interface{}) {} //TODO remove when https://github.com/golang/go/issues/20530 is fixed.\n")
 	g.w("func i16(n int16) int16 { return n }\n")
-	g.w("func i32(n int32) int32 { return n }\n")
 	g.w("func i64(n int64) int64 { return n }\n")
 	g.w("func i8(n int8) int8 { return n }\n")
 	g.w("func init() { nzf32 *= -1; nzf64 *= -1 }\n")
