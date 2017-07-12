@@ -505,10 +505,12 @@ func (g *gen) relop(n *exprNode) {
 		switch n.Op.(type) {
 		case *ir.Eq:
 			if t.ID() == u.ID() && t.(*ir.PointerType).Element.Kind() != ir.Function {
-				if t.ID() == idVoidPtr {
-					g.w("unsafe.Pointer")
+				switch {
+				case t.ID() == idVoidPtr:
+					g.convert(n.Childs[0], idVoidPtr)
+				default:
+					g.expression(n.Childs[0], false)
 				}
-				g.expression(n.Childs[0], false)
 				g.w("==")
 				g.expression(n.Childs[1], false)
 				break

@@ -277,7 +277,7 @@ func (o *opt) expr(n *ast.Expr) {
 			}
 		case *ast.UnaryExpr:
 			switch y.Op {
-			case token.AND:
+			case token.AND, token.MUL:
 				*n = y
 			}
 		}
