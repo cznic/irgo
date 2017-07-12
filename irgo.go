@@ -450,12 +450,24 @@ func (g *gen) pcmp(n *exprNode, op string) {
 	t := g.tc.MustType(n.Childs[0].TypeID)
 	u := g.tc.MustType(n.Childs[1].TypeID)
 	if t.Kind() == ir.Pointer && t.(*ir.PointerType).Element.Kind() == ir.Function {
+		if isZeroExpr(n.Childs[0]) {
+			g.expression(n.Childs[1], false)
+			g.w("%s nil", op)
+			return
+		}
+
+		if isZeroExpr(n.Childs[1]) {
+			g.expression(n.Childs[0], false)
+			g.w("%s nil", op)
+			return
+		}
+
 		// *(*unsafe.Pointer)(unsafe.Pointer(&struct{f t}{e}))
-		g.w("*(*unsafe.Pointer)(unsafe.Pointer(&struct{f %v}{", g.typ(t))
+		g.w("*(*uintptr)(unsafe.Pointer(&struct{f %v}{", g.typ(t))
 		g.expression(n.Childs[0], false)
 		g.w("}))")
 		g.w("%s", op)
-		g.w("*(*unsafe.Pointer)(unsafe.Pointer(&struct{f %v}{", g.typ(u))
+		g.w("*(*uintptr)(unsafe.Pointer(&struct{f %v}{", g.typ(u))
 		g.expression(n.Childs[1], false)
 		g.w("}))")
 		return
@@ -469,20 +481,18 @@ func (g *gen) pcmp(n *exprNode, op string) {
 			g.w("%s", op)
 			g.expression(n.Childs[1], false)
 		default:
-			g.w("unsafe.Pointer")
-			g.expression(n.Childs[0], false)
+			g.convert(n.Childs[0], idVoidPtr)
 			g.w(" %v ", op)
-			g.w("unsafe.Pointer")
-			g.expression(n.Childs[1], false)
+			g.convert(n.Childs[1], idVoidPtr)
 		}
 		return
 	}
 
 	// >=, >, <=, <
-	g.w("%s.P2U(unsafe.Pointer", crt)
-	g.expression(n.Childs[0], false)
-	g.w(")%s %s.P2U(unsafe.Pointer", op, crt)
-	g.expression(n.Childs[1], false)
+	g.w("%s.P2U(", crt)
+	g.convert(n.Childs[0], idVoidPtr)
+	g.w(")%s %s.P2U(", op, crt)
+	g.convert(n.Childs[1], idVoidPtr)
 	g.w(")")
 }
 
@@ -553,7 +563,7 @@ func (g *gen) binop(n *exprNode) {
 	if t.Kind() == ir.Pointer {
 		g.w("(%v)(unsafe.Pointer(", g.typ(t))
 		switch x, ok := n.Childs[0].Op.(*ir.Convert); {
-		case ok && isIntegalType(x.TypeID):
+		case ok && isIntegralType(x.TypeID):
 			g.w("uintptr")
 			g.expression(n.Childs[0].Childs[0], false)
 		default:
@@ -572,7 +582,7 @@ func (g *gen) binop(n *exprNode) {
 			TODO("%s: %T", n.Op.Pos(), x)
 		}
 		switch x, ok := n.Childs[1].Op.(*ir.Convert); {
-		case ok && isIntegalType(x.TypeID):
+		case ok && isIntegralType(x.TypeID):
 			g.w("uintptr")
 			g.expression(n.Childs[1].Childs[0], false)
 		default:
@@ -1417,7 +1427,7 @@ func (g *gen) convert2(e *exprNode, from, to ir.TypeID) {
 			}
 
 			fallthrough
-		case isIntegalType(to):
+		case isIntegralType(to):
 			s := g.tc.MustType(to).Kind().String()
 			s = strings.ToUpper(s[:1]) + s[1:]
 			g.w("%s.VA%s(&", crt, s)
@@ -1475,7 +1485,7 @@ func (g *gen) convert2(e *exprNode, from, to ir.TypeID) {
 		}
 	}
 
-	if et.Kind() == ir.Pointer && isIntegalType(to) {
+	if et.Kind() == ir.Pointer && isIntegralType(to) {
 		g.w("(%v)(%s.P2U(unsafe.Pointer", g.typ(t), crt)
 		g.expression(e, false)
 		g.w("))")
@@ -1500,7 +1510,7 @@ func (g *gen) convert2(e *exprNode, from, to ir.TypeID) {
 	switch {
 	case t.Kind() == ir.Pointer:
 		switch {
-		case isIntegalType(from):
+		case isIntegralType(from):
 			g.w("%s.U2P(uintptr", crt)
 			g.expression(e, false)
 			g.w(")")

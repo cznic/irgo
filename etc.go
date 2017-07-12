@@ -893,7 +893,7 @@ func isZeroValue(v ir.Value) bool {
 	panic("internal error")
 }
 
-func isIntegalType(t ir.TypeID) bool {
+func isIntegralType(t ir.TypeID) bool {
 	switch t {
 	case
 		idInt16,
@@ -908,4 +908,21 @@ func isIntegalType(t ir.TypeID) bool {
 		return true
 	}
 	return false
+}
+
+func isZeroExpr(n *exprNode) bool {
+	if n.Comma != nil {
+		return false
+	}
+
+	switch x := n.Op.(type) {
+	case *ir.Const32:
+		return x.Value == 0
+	case *ir.Const64:
+		return x.Value == 0
+	case *ir.Convert:
+		return isZeroExpr(n.Childs[0])
+	default:
+		return false
+	}
 }
