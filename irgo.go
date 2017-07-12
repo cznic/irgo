@@ -1069,21 +1069,21 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 				g.w("(%v)(unsafe.Pointer(uintptr(%v)))", g.typ(t), uintptr(x.Value))
 			}
 		case ir.Int8:
-			g.w("i8(%v) ", int8(x.Value))
+			g.w("int8(%v) ", int8(x.Value))
 		case ir.Uint8:
-			g.w("u8(%v) ", byte(x.Value))
+			g.w("uint8(%v) ", byte(x.Value))
 		case ir.Int16:
-			g.w("i16(%v) ", int16(x.Value))
+			g.w("int16(%v) ", int16(x.Value))
 		case ir.Uint16:
-			g.w("u16(%v) ", uint16(x.Value))
+			g.w("uint16(%v) ", uint16(x.Value))
 		case ir.Int32:
 			g.w("int32(%v) ", x.Value)
 		case ir.Uint32:
-			g.w("u32(%v) ", uint32(x.Value))
+			g.w("uint32(%v) ", uint32(x.Value))
 		case ir.Int64:
-			g.w("i64(%v) ", int64(x.Value))
+			g.w("int64(%v) ", int64(x.Value))
 		case ir.Uint64:
-			g.w("u64(%v) ", uint64(x.Value))
+			g.w("uint64(%v) ", uint64(x.Value))
 		case ir.Float32:
 			g.w("float32(%v) ", math.Float32frombits(uint32(x.Value)))
 		default:
@@ -1108,21 +1108,21 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 				g.w("float64(%v) ", v)
 			}
 		case idInt8:
-			g.w("i8(%v) ", int8(x.Value))
+			g.w("int8(%v) ", int8(x.Value))
 		case idUint8:
-			g.w("u8(%v) ", byte(x.Value))
+			g.w("uint8(%v) ", byte(x.Value))
 		case idInt16:
-			g.w("i16(%v) ", int16(x.Value))
+			g.w("int16(%v) ", int16(x.Value))
 		case idUint16:
-			g.w("u16(%v) ", uint16(x.Value))
+			g.w("uint16(%v) ", uint16(x.Value))
 		case idInt32:
 			g.w("int32(%v) ", int32(x.Value))
 		case idUint32:
-			g.w("u32(%v) ", uint32(x.Value))
+			g.w("uint32(%v) ", uint32(x.Value))
 		case idInt64:
-			g.w("i64(%v) ", x.Value)
+			g.w("int64(%v) ", x.Value)
 		case idUint64:
-			g.w("u64(%v) ", uint64(x.Value))
+			g.w("uint64(%v) ", uint64(x.Value))
 		default:
 			TODO("%s: %v", x.Pos(), x.TypeID)
 		}
@@ -2182,21 +2182,21 @@ func (g *gen) value(pos token.Position, id ir.TypeID, v ir.Value) {
 				g.w("(%v)(%s.U2P(%v))", g.typ(t), crt, uintptr(x.Value))
 			}
 		case ir.Int8:
-			g.w("i8(%v)", int8(x.Value))
+			g.w("int8(%v)", int8(x.Value))
 		case ir.Uint8:
-			g.w("u8(%v)", byte(x.Value))
+			g.w("uint8(%v)", byte(x.Value))
 		case ir.Int16:
-			g.w("i16(%v)", int16(x.Value))
+			g.w("int16(%v)", int16(x.Value))
 		case ir.Uint16:
-			g.w("u16(%v)", uint16(x.Value))
+			g.w("uint16(%v)", uint16(x.Value))
 		case ir.Int32:
 			g.w("int32(%v)", x.Value)
 		case ir.Uint32:
-			g.w("u32(%v)", uint32(x.Value))
+			g.w("uint32(%v)", uint32(x.Value))
 		case ir.Int64:
-			g.w("i64(%v)", x.Value)
+			g.w("int64(%v)", x.Value)
 		case ir.Uint64:
-			g.w("u64(%v)", uint64(x.Value))
+			g.w("uint64(%v)", uint64(x.Value))
 		case ir.Float32:
 			g.w("float32(%v)", x.Value)
 		case ir.Float64:
@@ -2214,21 +2214,21 @@ func (g *gen) value(pos token.Position, id ir.TypeID, v ir.Value) {
 				g.w("(%v)(%s.U2P(%v))", g.typ(t), crt, uintptr(x.Value))
 			}
 		case ir.Int8:
-			g.w("i8(%v)", int8(x.Value))
+			g.w("int8(%v)", int8(x.Value))
 		case ir.Uint8:
-			g.w("u8(%v)", byte(x.Value))
+			g.w("uint8(%v)", byte(x.Value))
 		case ir.Int16:
-			g.w("i16(%v)", int16(x.Value))
+			g.w("int16(%v)", int16(x.Value))
 		case ir.Uint16:
-			g.w("u16(%v)", uint16(x.Value))
+			g.w("uint16(%v)", uint16(x.Value))
 		case ir.Int32:
 			g.w("int32(%v)", int32(x.Value))
 		case ir.Uint32:
-			g.w("u32(%v)", uint32(x.Value))
+			g.w("uint32(%v)", uint32(x.Value))
 		case ir.Int64:
-			g.w("i64(%v)", x.Value)
+			g.w("int64(%v)", x.Value)
 		case ir.Uint64:
-			g.w("u64(%v)", uint64(x.Value))
+			g.w("uint64(%v)", uint64(x.Value))
 		case ir.Float32:
 			g.w("float32(%v)", x.Value)
 		case ir.Float64:
@@ -2362,14 +2362,7 @@ func (g *gen) gen() error {
 	}
 	g.w("func bool2int(b bool) int32 { if b { return 1}; return 0 }\n")
 	g.w("func bug20530(interface{}) {} //TODO remove when https://github.com/golang/go/issues/20530 is fixed.\n")
-	g.w("func i16(n int16) int16 { return n }\n")
-	g.w("func i64(n int64) int64 { return n }\n")
-	g.w("func i8(n int8) int8 { return n }\n")
 	g.w("func init() { nzf32 *= -1; nzf64 *= -1 }\n")
-	g.w("func u16(n uint16) uint16 { return n }\n")
-	g.w("func u32(n uint32) uint32 { return n }\n")
-	g.w("func u64(n uint64) uint64 { return n }\n")
-	g.w("func u8(n byte) byte { return n }\n")
 	g.w("var inf = math.Inf(1)\n")
 	g.w("var nzf32 float32 // -0.0\n")
 	g.w("var nzf64 float64 // -0.0\n")
