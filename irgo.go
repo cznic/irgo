@@ -1181,10 +1181,9 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 						break
 					}
 
-					g.w("unsafe.Pointer")
-					g.expression(n.Childs[1], false)
+					g.convert(n.Childs[1], idVoidPtr)
 				default:
-					g.w("unsafe.Pointer")
+					g.w("unsafe.Pointer") //TODO unsafe.Pointer kept here b/c of sqlite/mptest failing.
 					g.expression(n.Childs[1], false)
 				}
 			default:
@@ -1216,9 +1215,13 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 				if x.Neg {
 					s = "-"
 				}
-				g.w("*(*uintptr)(unsafe.Pointer")
-				g.expression(n.Childs[0].Childs[0], false)
-				g.w(") %s= %v*uintptr(", s, sz)
+				g.w("*(*uintptr)(")
+				g.convert(n.Childs[0].Childs[0], idVoidPtr)
+				s2 := ""
+				if sz != 1 {
+					s2 = fmt.Sprintf("%v*", sz)
+				}
+				g.w(") %s= %suintptr(", s, s2)
 				g.expression(e.Childs[1], false)
 				g.w(")")
 			case *ir.Lsh:
