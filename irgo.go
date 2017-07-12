@@ -573,24 +573,26 @@ func (g *gen) binop(n *exprNode) {
 			g.convert(n.Childs[0], idVoidPtr)
 			g.w(")")
 		}
-		switch x := n.Op.(type) {
-		case *ir.Add:
-			g.w("+")
-		case *ir.Mul:
-			g.w("*")
-		case *ir.Sub:
-			g.w("-")
-		default:
-			TODO("%s: %T", n.Op.Pos(), x)
-		}
-		switch x, ok := n.Childs[1].Op.(*ir.Convert); {
-		case ok && isIntegralType(x.TypeID):
-			g.w("uintptr")
-			g.expression(n.Childs[1].Childs[0], false)
-		default:
-			g.w("uintptr(")
-			g.convert(n.Childs[1], idVoidPtr)
-			g.w(")")
+		if !isZeroExpr(n.Childs[1]) {
+			switch x := n.Op.(type) {
+			case *ir.Add:
+				g.w("+")
+			case *ir.Mul:
+				g.w("*")
+			case *ir.Sub:
+				g.w("-")
+			default:
+				TODO("%s: %T", n.Op.Pos(), x)
+			}
+			switch x, ok := n.Childs[1].Op.(*ir.Convert); {
+			case ok && isIntegralType(x.TypeID):
+				g.w("uintptr")
+				g.expression(n.Childs[1].Childs[0], false)
+			default:
+				g.w("uintptr(")
+				g.convert(n.Childs[1], idVoidPtr)
+				g.w(")")
+			}
 		}
 		g.w("))")
 		return
@@ -1135,9 +1137,13 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 		}
 		g.w("uintptr(")
 		g.convert(n.Childs[0], idVoidPtr)
-		g.w(")-uintptr(")
-		g.convert(n.Childs[1], idVoidPtr)
-		g.w("))")
+		g.w(")")
+		if !isZeroExpr(n.Childs[1]) {
+			g.w("-uintptr(")
+			g.convert(n.Childs[1], idVoidPtr)
+			g.w(")")
+		}
+		g.w(")")
 		if sz != 1 {
 			g.w("/%v)", sz)
 		}
@@ -1452,7 +1458,6 @@ func (g *gen) convert2(e *exprNode, from, to ir.TypeID) {
 
 	t := g.tc.MustType(to)
 	if t.Kind() == ir.Pointer && isZeroExpr(e) {
-		//TODO crt.Xutimes(tls, _zLockFile, (*[2]crt.Xstruct_timeval)(nil)) -> crt.Xutimes(tls, _zLockFile, nil)
 		g.w("nil")
 		return
 	}

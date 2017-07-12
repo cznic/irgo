@@ -922,6 +922,8 @@ func isZeroExpr(n *exprNode) bool {
 		return x.Value == 0
 	case *ir.Convert:
 		return isZeroExpr(n.Childs[0])
+	case *ir.Nil:
+		return true
 	default:
 		return false
 	}
