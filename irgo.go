@@ -975,9 +975,7 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 			g.w("!= 0 { return ")
 			switch {
 			case n.TypeID == idVoidPtr:
-				g.w("unsafe.Pointer(")
-				g.expression(n.Childs[1], false)
-				g.w(")")
+				g.convert(n.Childs[1], idVoidPtr)
 			default:
 				g.expression(n.Childs[1], false)
 			}
@@ -1025,8 +1023,8 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 		if void {
 			switch {
 			case t.Kind() == ir.Pointer:
-				g.w("*(*uintptr)(unsafe.Pointer")
-				g.expression(n.Childs[0], false)
+				g.w("*(*uintptr)(")
+				g.convert(n.Childs[0], idVoidPtr)
 				g.w(") += uintptr(%v)", uintptr(x.Delta))
 			default:
 				g.w("*")
@@ -1077,8 +1075,8 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 		if void {
 			switch {
 			case t.Kind() == ir.Pointer:
-				g.w("*(*uintptr)(unsafe.Pointer")
-				g.expression(n.Childs[0], false)
+				g.w("*(*uintptr)(")
+				g.convert(n.Childs[0], idVoidPtr)
 				g.w(") += uintptr(%v)", uintptr(x.Delta))
 			default:
 				g.w("*")
@@ -1131,12 +1129,18 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 		}
 	case *ir.PtrDiff:
 		sz := g.model.Sizeof(g.tc.MustType(x.PtrType).(*ir.PointerType).Element)
-		g.w("%v(((", x.TypeID)
-		g.w("uintptr(unsafe.Pointer")
-		g.expression(n.Childs[0], false)
-		g.w(")-uintptr(unsafe.Pointer")
-		g.expression(n.Childs[1], false)
-		g.w("))/%v)", sz)
+		g.w("%v((", x.TypeID)
+		if sz != 1 {
+			g.w("(")
+		}
+		g.w("uintptr(")
+		g.convert(n.Childs[0], idVoidPtr)
+		g.w(")-uintptr(")
+		g.convert(n.Childs[1], idVoidPtr)
+		g.w("))")
+		if sz != 1 {
+			g.w("/%v)", sz)
+		}
 		g.w(")")
 	case *ir.Result:
 		if x.Address {
