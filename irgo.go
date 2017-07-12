@@ -1451,15 +1451,10 @@ func (g *gen) convert2(e *exprNode, from, to ir.TypeID) {
 	}
 
 	t := g.tc.MustType(to)
-	if t.Kind() == ir.Pointer {
-		switch x := e.Op.(type) {
-		case *ir.Const32:
-			switch x.Value {
-			case 0:
-				g.w("nil")
-				return
-			}
-		}
+	if t.Kind() == ir.Pointer && isZeroExpr(e) {
+		//TODO crt.Xutimes(tls, _zLockFile, (*[2]crt.Xstruct_timeval)(nil)) -> crt.Xutimes(tls, _zLockFile, nil)
+		g.w("nil")
+		return
 	}
 
 	et := g.tc.MustType(from)
@@ -1475,11 +1470,6 @@ func (g *gen) convert2(e *exprNode, from, to ir.TypeID) {
 		if et.Kind() == ir.Function {
 			switch y := e.Op.(type) {
 			case *ir.Const32:
-				if y.Value == 0 {
-					g.w("nil")
-					return
-				}
-
 				// *(*t)(unsafe.Pointer(&struct{f uintptr}{e}))
 				g.w("*(*%v)(unsafe.Pointer(&struct{f uintptr}{%v}))", g.typ(t), uintptr(y.Value))
 			case *ir.Convert:
@@ -1495,8 +1485,8 @@ func (g *gen) convert2(e *exprNode, from, to ir.TypeID) {
 	}
 
 	if et.Kind() == ir.Pointer && isIntegralType(to) {
-		g.w("(%v)(%s.P2U(unsafe.Pointer", g.typ(t), crt)
-		g.expression(e, false)
+		g.w("(%v)(%s.P2U(", g.typ(t), crt)
+		g.convert(e, idVoidPtr)
 		g.w("))")
 		return
 	}
@@ -1524,7 +1514,9 @@ func (g *gen) convert2(e *exprNode, from, to ir.TypeID) {
 			g.expression(e, false)
 			g.w(")")
 		default:
-			g.w("unsafe.Pointer")
+			if e.TypeID != idVoidPtr {
+				g.w("unsafe.Pointer")
+			}
 			g.expression(e, false)
 		}
 	default:
