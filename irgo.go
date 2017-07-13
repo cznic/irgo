@@ -2253,6 +2253,7 @@ func (g *gen) dataDefinition(d *ir.DataDefinition) {
 	}
 
 	nm := g.mangle(d.NameID, d.Linkage == ir.ExternalLinkage, -1)
+	g.w("%s", d.Comment)
 	g.w("var %s ", nm)
 	t := g.tc.MustType(d.TypeID)
 	// fmt.Printf("%s: %v %v // DD \n", d.Position, d.NameID, t)
