@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"unsafe"
 
@@ -107,7 +108,7 @@ type gen struct {
 	types     map[ir.TypeID]struct{}
 }
 
-func newGen(obj []ir.Object, tm map[ir.TypeID]string) *gen {
+func newGen(obj []ir.Object, tm map[ir.TypeID]string, o *options) *gen {
 	model, err := ir.NewMemoryModel()
 	if err != nil {
 		panic(err)
@@ -128,7 +129,7 @@ func newGen(obj []ir.Object, tm map[ir.TypeID]string) *gen {
 		storebits: map[ir.TypeID]struct{}{},
 		stores:    map[ir.TypeID]struct{}{},
 		strTab:    map[ir.StringID]int{},
-		tc:        ir.TypeCache{},
+		tc:        o.tc,
 		tm:        tm,
 		types:     map[ir.TypeID]struct{}{},
 	}
@@ -246,7 +247,7 @@ func (g *gen) typ0(buf *buffer.Bytes, t ir.Type, full bool) {
 		if full {
 			buf.WriteString("struct{")
 			for i, v := range t.(*ir.StructOrUnionType).Fields {
-				fmt.Fprintf(buf, "X%v ", i)
+				fmt.Fprintf(buf, "X%s ", g.fld(t.ID(), i))
 				g.typ0(buf, v, false)
 				buf.WriteByte(';')
 			}
@@ -260,7 +261,7 @@ func (g *gen) typ0(buf *buffer.Bytes, t ir.Type, full bool) {
 		if full {
 			buf.WriteString("struct{X [0]struct{")
 			for i, v := range t.(*ir.StructOrUnionType).Fields {
-				fmt.Fprintf(buf, "X%v ", i)
+				fmt.Fprintf(buf, "X%s ", g.fld(t.ID(), i))
 				g.typ0(buf, v, false)
 				buf.WriteByte(';')
 			}
@@ -1209,7 +1210,7 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 
 			g.w("(")
 			g.expression(e, false)
-			g.w(".X%v)", x.Index)
+			g.w(".X%s)", g.fld(t.ID(), x.Index))
 		}
 	case *ir.Global:
 		nm := g.mangle(x.NameID, x.Linkage == ir.ExternalLinkage, -1)
@@ -1769,7 +1770,6 @@ func (g *gen) convert2(e *exprNode, from, to ir.TypeID) {
 		}
 		return
 	}
-
 	t := g.tc.MustType(to)
 	if t.Kind() == ir.Pointer && isZeroExpr(e) {
 		g.w("nil")
@@ -1997,6 +1997,7 @@ func (g *gen) functionDefinition(oi int, f *ir.FunctionDefinition) {
 		}
 		g.w(" %v\n", g.typ2(t))
 	}
+
 	nodes := newGraph(g, f.Body)
 	g.collectLabels(nodes)
 	for i, v := range nodes {
@@ -2045,6 +2046,17 @@ func (g *gen) unionValue(pos token.Position, ft ir.Type, val []ir.Value) []byte 
 		TODO("%s: %v, %T(%v)", pos, ft, val[0], val[0])
 	}
 	return b
+}
+
+func (g *gen) fld(t ir.TypeID, i int) string {
+	a := g.tc.MustType(t).(*ir.StructOrUnionType).Names
+	if i < len(a) {
+		if nm := a[i]; nm != 0 {
+			return nm.String()
+		}
+	}
+
+	return strconv.Itoa(i)
 }
 
 func (g *gen) value(pos token.Position, id ir.TypeID, v ir.Value) {
@@ -2102,7 +2114,7 @@ func (g *gen) value(pos token.Position, id ir.TypeID, v ir.Value) {
 						continue
 					}
 
-					g.w("X%v: ", i)
+					g.w("X%s: ", g.fld(t.ID(), i))
 					g.value(pos, f[i].ID(), v)
 					g.w(", ")
 				}
@@ -2456,9 +2468,25 @@ var (
 	re6 = regexp.MustCompile(`{\n\n`)
 )
 
+type options struct {
+	tc ir.TypeCache
+}
+
+// Option is a configuration/setup function that can be passed to the New
+// function.
+type Option func(*options) error
+
+// TypeCache option requests to use a shared type cache tc.
+func TypeCache(tc ir.TypeCache) Option {
+	return func(o *options) error {
+		o.tc = tc
+		return nil
+	}
+}
+
 // New writes Go code generated from obj to out.  No package or import clause
 // is generated. The types argument is consulted for named types.
-func New(out io.Writer, obj []ir.Object, types map[ir.TypeID]string) (err error) {
+func New(out io.Writer, obj []ir.Object, types map[ir.TypeID]string, opts ...Option) (err error) {
 	var g *gen
 
 	defer func() {
@@ -2488,6 +2516,16 @@ func New(out io.Writer, obj []ir.Object, types map[ir.TypeID]string) (err error)
 		}
 	}()
 
-	g = newGen(obj, types)
+	var o options
+	for _, v := range opts {
+		if err := v(&o); err != nil {
+			return err
+		}
+
+	}
+	if o.tc == nil {
+		o.tc = ir.TypeCache{}
+	}
+	g = newGen(obj, types, &o)
 	return g.gen()
 }
