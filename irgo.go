@@ -752,6 +752,8 @@ func (g *gen) uintptr(n *exprNode) {
 	switch x := g.num(n).(type) {
 	case int32:
 		g.w("uintptr(%v)", uintptr(x))
+	case uint32:
+		g.w("uintptr(%v)", uintptr(x))
 	case int64:
 		g.w("uintptr(%v)", uintptr(x))
 	case uint64:
@@ -801,6 +803,8 @@ func (g *gen) int16(n *exprNode) {
 func (g *gen) uint16(n *exprNode) {
 	switch x := g.num(n).(type) {
 	case int32:
+		g.w("uint16(%v)", uint16(x))
+	case uint32:
 		g.w("uint16(%v)", uint16(x))
 	case int64:
 		g.w("uint16(%v)", uint16(x))
