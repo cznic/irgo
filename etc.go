@@ -34,7 +34,7 @@ var (
 	idUint64    = ir.TypeID(dict.SID("uint64"))
 	idUint8     = ir.TypeID(dict.SID("uint8"))
 	idUint8Ptr  = ir.TypeID(dict.SID("*uint8"))
-	idVaList    = ir.TypeID(dict.SID("*struct{struct{}}"))
+	idVaList    = ir.TypeID(dict.SID("*struct{_ struct{}}"))
 	idVoidPtr   = ir.TypeID(dict.SID("*struct{}"))
 
 	hooks = strutil.PrettyPrintHooks{
