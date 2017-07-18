@@ -4,7 +4,6 @@
 
 // +build !irgo.noopt
 
-//TODO TCC 21_: crt.Xprintf(tls, str(20), unsafe.Pointer((*int8)(unsafe.Pointer(&_destarray))))
 //TODO P2U(U2P(x))
 
 package irgo
@@ -268,6 +267,8 @@ func (o *opt) expr(n *ast.Expr) {
 			*ast.Ident:
 
 			*n = y
+		case *ast.BasicLit:
+			*n = y
 		case *ast.ParenExpr:
 			x.X = y.X
 		case *ast.SelectorExpr:
@@ -309,6 +310,7 @@ func (o *opt) expr(n *ast.Expr) {
 		o.expr(&x.X)
 	case *ast.UnaryExpr:
 		o.expr(&x.X)
+		//TODO &(&...) -> &...
 	default:
 		TODO("%s: %T", o.pos(x), x)
 	}

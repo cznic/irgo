@@ -1144,6 +1144,19 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 			break
 		}
 
+		from := g.tc.MustType(x.TypeID)
+		if from.Kind() == ir.Pointer {
+			if fe := from.(*ir.PointerType).Element; fe.Kind() == ir.Array {
+				at := fe.(*ir.ArrayType)
+				if at.Items > 0 && at.Item.Pointer().ID() == to.ID() {
+					g.w("&")
+					g.expression(e, false)
+					g.w("[0]")
+					break
+				}
+			}
+		}
+
 		g.convert2(e, x.TypeID, x.Result)
 	case *ir.Copy:
 		if void {
