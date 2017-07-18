@@ -310,7 +310,28 @@ func (o *opt) expr(n *ast.Expr) {
 		o.expr(&x.X)
 	case *ast.UnaryExpr:
 		o.expr(&x.X)
-		//TODO &(&...) -> &...
+		// &(&...) -> &...
+		// 3: *ast.UnaryExpr {
+		// .  OpPos: irgo.out:61:105
+		// .  Op: &
+		// .  X: *ast.IndexExpr {
+		// .  .  X: *ast.UnaryExpr {
+		// .  .  .  OpPos: irgo.out:61:107
+		// .  .  .  Op: &
+		// .  .  .  X: *ast.Ident {
+		switch x.Op {
+		case token.AND:
+			switch y := x.X.(type) {
+			case *ast.IndexExpr:
+				switch z := y.X.(type) {
+				case *ast.UnaryExpr:
+					switch z.Op {
+					case token.AND:
+						y.X = z.X
+					}
+				}
+			}
+		}
 	default:
 		TODO("%s: %T", o.pos(x), x)
 	}
