@@ -924,7 +924,25 @@ func isZeroExpr(n *exprNode) bool {
 		return isZeroExpr(n.Childs[0])
 	case *ir.Nil:
 		return true
+	case *ir.Mul:
+		return isZeroExpr(n.Childs[0]) || isZeroExpr(n.Childs[1])
 	default:
+		return false
+	}
+}
+
+func isOne(n *exprNode) bool {
+	if n.Comma != nil || !isConst(n) {
+		return false
+	}
+
+	switch x := n.Op.(type) {
+	case *ir.Const32:
+		return x.Value == 1
+	case *ir.Convert:
+		return isOne(n.Childs[0])
+	default:
+		TODO("%s: %T", x.Pos(), x)
 		return false
 	}
 }

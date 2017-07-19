@@ -143,6 +143,19 @@ func newGen(obj []ir.Object, tm map[ir.TypeID]string, o *options) *gen {
 	return g
 }
 
+func (g *gen) isIntptr(n *exprNode) bool {
+	if t := g.tc.MustType(n.TypeID); t.Kind() != ir.Pointer {
+		return false
+	}
+
+	switch x := n.Op.(type) {
+	case *ir.Convert:
+		return isIntegralType(x.TypeID) || g.isIntptr(n.Childs[0])
+	default:
+		return false
+	}
+}
+
 func (g *gen) reg(t ir.TypeID) int {
 	if n, ok := g.stable[t]; ok {
 		return n
@@ -564,6 +577,77 @@ func (g *gen) relop(n *exprNode) {
 func (g *gen) binop(n *exprNode) {
 	t := g.tc.MustType(n.Childs[0].TypeID)
 	if t.Kind() == ir.Pointer {
+		if isConst(n.Childs[0]) && !isConst(n.Childs[1]) {
+			n.Childs[0], n.Childs[1] = n.Childs[1], n.Childs[0]
+		}
+		switch n.Op.(type) {
+		case *ir.Add, *ir.Sub:
+			if isZeroExpr(n.Childs[1]) {
+				g.expression(n.Childs[0], false)
+				return
+			}
+
+			if g.isIntptr(n.Childs[0]) {
+				break
+			}
+
+			sgn := 1
+			if _, ok := n.Op.(*ir.Sub); ok {
+				sgn = -1
+			}
+			sz := g.model.Sizeof(t.(*ir.PointerType).Element)
+			switch x := n.Childs[1].Op.(type) {
+			case *ir.Mul:
+				if isConst(n.Childs[1].Childs[1]) {
+					var k int64
+					switch y := g.num(n.Childs[1].Childs[1]).(type) {
+					case uintptr:
+						k = int64(y)
+					default:
+						TODO("%s: %T", x.Position, y)
+					}
+					if k == sz {
+						g.elems[t.ID()] = struct{}{}
+						g.w("elem%v(", g.reg(t.ID()))
+						g.expression(n.Childs[0], false)
+						g.w(", ")
+						g.uintptr2(n.Childs[1].Childs[0], sgn)
+						g.w(")")
+						return
+					}
+				}
+			default:
+				if sz != 1 {
+					break
+				}
+
+				g.elems[t.ID()] = struct{}{}
+				g.w("elem%v(", g.reg(t.ID()))
+				g.expression(n.Childs[0], false)
+				g.w(", ")
+				g.uintptr2(n.Childs[1], sgn)
+				g.w(")")
+				return
+			}
+		case *ir.Mul:
+			if isZeroExpr(n.Childs[0]) || isZeroExpr(n.Childs[1]) {
+				TODO("%s: %T", n.Op.Pos(), n.Op)
+			}
+
+			if isOne(n.Childs[0]) {
+				TODO("%s: %T", n.Op.Pos(), n.Op)
+			}
+
+			if isOne(n.Childs[1]) {
+				TODO("%s: %T", n.Op.Pos(), n.Op)
+			}
+
+			g.uintptr(n.Childs[0])
+			g.w("*")
+			g.uintptr(n.Childs[1])
+			return
+		}
+
 		g.w("(%v)(unsafe.Pointer(", g.typ(t))
 		switch x, ok := n.Childs[0].Op.(*ir.Convert); {
 		case ok && isIntegralType(x.TypeID):
@@ -574,27 +658,17 @@ func (g *gen) binop(n *exprNode) {
 			g.convert(n.Childs[0], idVoidPtr)
 			g.w(")")
 		}
-		if !isZeroExpr(n.Childs[1]) {
-			switch x := n.Op.(type) {
-			case *ir.Add:
-				g.w("+")
-			case *ir.Mul:
-				g.w("*")
-			case *ir.Sub:
-				g.w("-")
-			default:
-				TODO("%s: %T", n.Op.Pos(), x)
-			}
-			switch x, ok := n.Childs[1].Op.(*ir.Convert); {
-			case ok && isIntegralType(x.TypeID):
-				g.w("uintptr")
-				g.expression(n.Childs[1].Childs[0], false)
-			default:
-				g.w("uintptr(")
-				g.convert(n.Childs[1], idVoidPtr)
-				g.w(")")
-			}
+		switch x := n.Op.(type) {
+		case *ir.Add:
+			g.w("+")
+		case *ir.Mul:
+			g.w("*")
+		case *ir.Sub:
+			g.w("-")
+		default:
+			TODO("%s: %T", n.Op.Pos(), x)
 		}
+		g.uintptr(n.Childs[1])
 		g.w("))")
 		return
 	}
@@ -662,6 +736,10 @@ func (g *gen) num(n *exprNode) interface{} {
 		case idUint32:
 			return uint32(x.Value)
 		default:
+			if t := g.tc.MustType(x.TypeID); t.Kind() == ir.Pointer {
+				return uintptr(x.Value)
+			}
+
 			TODO("%s: %v", x.Position, x.TypeID)
 		}
 	case *ir.Const64:
@@ -682,6 +760,8 @@ func (g *gen) num(n *exprNode) interface{} {
 			switch to.Kind() {
 			case ir.Int32:
 				return x
+			case ir.Pointer:
+				return uintptr(x)
 			default:
 				TODO("%s: internal error: %v", n.Op.Pos(), to)
 			}
@@ -689,6 +769,8 @@ func (g *gen) num(n *exprNode) interface{} {
 			switch to.Kind() {
 			case ir.Int32:
 				return int32(x)
+			case ir.Pointer:
+				return uintptr(x)
 			default:
 				TODO("%s: internal error: %v", n.Op.Pos(), to)
 			}
@@ -703,6 +785,8 @@ func (g *gen) num(n *exprNode) interface{} {
 			switch to.Kind() {
 			case ir.Int32:
 				return int32(x)
+			case ir.Pointer:
+				return uintptr(x)
 			default:
 				TODO("%s: internal error: %v", n.Op.Pos(), to)
 			}
@@ -737,27 +821,80 @@ func (g *gen) uint(n *exprNode) {
 	}
 }
 
-func (g *gen) uintptr(n *exprNode) {
+func (g *gen) uintptr(n *exprNode) { g.uintptr2(n, 1) }
+
+func (g *gen) uintptr2(n *exprNode, sgn int) {
 	if isZeroExpr(n) {
 		g.w("0")
 		return
 	}
 
+	s := ""
+	if sgn < 0 {
+		s = "-"
+	}
 	if !isConst(n) {
-		g.w("uintptr")
-		g.expression(n, false)
-		return
+		if isIntegralType(n.TypeID) {
+			g.w("%suintptr", s)
+			g.expression(n, false)
+			return
+		}
+
+		switch t := g.tc.MustType(n.TypeID); t.Kind() {
+		case ir.Pointer:
+			switch x := n.Op.(type) {
+			case *ir.Convert:
+				if isIntegralType(x.TypeID) {
+					g.uintptr2(n.Childs[0], sgn)
+					return
+				}
+
+				g.uintptr2(n.Childs[0], sgn)
+			case *ir.Mul:
+				if isZeroExpr(n.Childs[0]) || isZeroExpr(n.Childs[1]) {
+					TODO("%s: %T", n.Op.Pos(), n.Op)
+				}
+
+				if isOne(n.Childs[0]) {
+					g.uintptr2(n.Childs[1], sgn)
+					return
+				}
+
+				if isOne(n.Childs[1]) {
+					TODO("%s: %T", n.Op.Pos(), n.Op)
+				}
+
+				g.uintptr2(n.Childs[0], sgn)
+				g.w("*")
+				g.uintptr(n.Childs[1])
+			default:
+				g.w("%suintptr(", s)
+				switch n.TypeID {
+				case idVoidPtr:
+					g.expression(n, false)
+				default:
+					g.convert(n, idVoidPtr)
+				}
+				g.w(")")
+			}
+			return
+		default:
+			TODO("%s: %v", n.Op.Pos(), t)
+		}
 	}
 
+	us := uintptr(sgn)
 	switch x := g.num(n).(type) {
 	case int32:
-		g.w("uintptr(%v)", uintptr(x))
+		g.w("uintptr(%v)", us*uintptr(x))
 	case uint32:
-		g.w("uintptr(%v)", uintptr(x))
+		g.w("uintptr(%v)", us*uintptr(x))
 	case int64:
-		g.w("uintptr(%v)", uintptr(x))
+		g.w("uintptr(%v)", us*uintptr(x))
 	case uint64:
-		g.w("uintptr(%v)", uintptr(x))
+		g.w("uintptr(%v)", us*uintptr(x))
+	case uintptr:
+		g.w("uintptr(%v)", us*x)
 	default:
 		TODO("%s: %T", n.Op.Pos(), x)
 	}
@@ -1179,6 +1316,10 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 	case *ir.Drop:
 		g.expression(n.Childs[0], true)
 	case *ir.Element:
+		if g.isIntptr(n.Childs[0]) {
+			TODO("%s", x.Position)
+		}
+
 		if x, ok := n.Childs[0].Op.(*ir.Variable); ok {
 			nfo := &g.f.varNfo[x.Index]
 			sc := nfo.scope
@@ -1195,6 +1336,11 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 		if !x.Address {
 			g.w("*")
 		}
+		if isZeroExpr(n.Childs[1]) {
+			g.expression(n.Childs[0], false)
+			break
+		}
+
 		g.w("elem%v(", g.reg(x.TypeID))
 		g.expression(n.Childs[0], false)
 		g.w(", %s", s)
