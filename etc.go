@@ -575,7 +575,13 @@ func (g *graph) computeStackStates(m map[*node]struct{}, n *node, s stack) {
 		case *ir.Switch:
 			s = s.pop()
 		case *ir.Variable:
-			nfo := g.gen.f.varNfo[x.Index]
+			nfo := &g.gen.f.varNfo[x.Index]
+			switch {
+			case x.Address:
+				nfo.p++
+			default:
+				nfo.r++
+			}
 			s = s.pushT(g.qptrID(nfo.def.TypeID, x.Address))
 		case *ir.Xor:
 			s = s.pop().pop().pushT(x.TypeID)
@@ -809,9 +815,6 @@ func varInfo(ops []ir.Operation) (nfo []varNfo) {
 			a = a[:len(a)-1]
 		case *ir.VariableDeclaration:
 			v := varNfo{def: x, scope: a[len(a)-1]}
-			if x.Value != nil {
-				v.w++
-			}
 			nfo = append(nfo, v)
 		}
 	}
@@ -942,7 +945,6 @@ func isOne(n *exprNode) bool {
 	case *ir.Convert:
 		return isOne(n.Childs[0])
 	default:
-		TODO("%s: %T", x.Pos(), x)
 		return false
 	}
 }

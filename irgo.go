@@ -53,9 +53,10 @@ func TODO(msg string, more ...interface{}) string { //TODOOK
 type varNfo struct {
 	def   *ir.VariableDeclaration
 	i     int
-	r     int
+	p     int // address taken
+	r     int // read
 	scope int
-	w     int
+	w     int // written
 }
 
 type typeNfo struct {
@@ -85,27 +86,28 @@ func newFn(tc ir.TypeCache, f *ir.FunctionDefinition) *fn {
 }
 
 type gen struct {
-	builtins  map[int]struct{} // Object#
-	copies    map[ir.TypeID]struct{}
-	elems     map[ir.TypeID]struct{}
-	f         *fn
-	fns       map[ir.NameID]*ir.FunctionDefinition
-	labels    map[int]int
-	lblUsed   map[int]int
-	mangled   map[cname]ir.NameID
-	model     ir.MemoryModel
-	obj       []ir.Object
-	out       *buffer.Bytes
-	postIncs  map[ir.TypeID]struct{}
-	preIncs   map[ir.TypeID]struct{}
-	stable    map[ir.TypeID]int
-	storebits map[ir.TypeID]struct{}
-	stores    map[ir.TypeID]struct{}
-	strTab    map[ir.StringID]int
-	strings   buffer.Bytes
-	tc        ir.TypeCache
-	tm        map[ir.TypeID]string
-	types     map[ir.TypeID]struct{}
+	builtins       map[int]struct{} // Object#
+	copies         map[ir.TypeID]struct{}
+	elems          map[ir.TypeID]struct{}
+	f              *fn
+	fns            map[ir.NameID]*ir.FunctionDefinition
+	labels         map[int]int
+	lblUsed        map[int]int
+	mangled        map[cname]ir.NameID
+	mangledHandles map[ir.TypeID]ir.NameID
+	model          ir.MemoryModel
+	obj            []ir.Object
+	out            *buffer.Bytes
+	postIncs       map[ir.TypeID]struct{}
+	preIncs        map[ir.TypeID]struct{}
+	stable         map[ir.TypeID]int
+	storebits      map[ir.TypeID]struct{}
+	stores         map[ir.TypeID]struct{}
+	strTab         map[ir.StringID]int
+	strings        buffer.Bytes
+	tc             ir.TypeCache
+	tm             map[ir.TypeID]string
+	types          map[ir.TypeID]struct{}
 }
 
 func newGen(obj []ir.Object, tm map[ir.TypeID]string, o *options) *gen {
@@ -115,23 +117,24 @@ func newGen(obj []ir.Object, tm map[ir.TypeID]string, o *options) *gen {
 	}
 
 	g := &gen{
-		builtins:  map[int]struct{}{},
-		copies:    map[ir.TypeID]struct{}{},
-		elems:     map[ir.TypeID]struct{}{},
-		fns:       map[ir.NameID]*ir.FunctionDefinition{},
-		mangled:   map[cname]ir.NameID{},
-		model:     model,
-		obj:       obj,
-		out:       &buffer.Bytes{},
-		postIncs:  map[ir.TypeID]struct{}{},
-		preIncs:   map[ir.TypeID]struct{}{},
-		stable:    map[ir.TypeID]int{},
-		storebits: map[ir.TypeID]struct{}{},
-		stores:    map[ir.TypeID]struct{}{},
-		strTab:    map[ir.StringID]int{},
-		tc:        o.tc,
-		tm:        tm,
-		types:     map[ir.TypeID]struct{}{},
+		builtins:       map[int]struct{}{},
+		copies:         map[ir.TypeID]struct{}{},
+		elems:          map[ir.TypeID]struct{}{},
+		fns:            map[ir.NameID]*ir.FunctionDefinition{},
+		mangled:        map[cname]ir.NameID{},
+		mangledHandles: map[ir.TypeID]ir.NameID{},
+		model:          model,
+		obj:            obj,
+		out:            &buffer.Bytes{},
+		postIncs:       map[ir.TypeID]struct{}{},
+		preIncs:        map[ir.TypeID]struct{}{},
+		stable:         map[ir.TypeID]int{},
+		storebits:      map[ir.TypeID]struct{}{},
+		stores:         map[ir.TypeID]struct{}{},
+		strTab:         map[ir.StringID]int{},
+		tc:             o.tc,
+		tm:             tm,
+		types:          map[ir.TypeID]struct{}{},
 	}
 	for _, v := range obj {
 		switch x := v.(type) {
@@ -209,6 +212,46 @@ func (g *gen) mangle2(pkg, nm ir.NameID, exported bool, index int) ir.NameID {
 	id := ir.NameID(dict.ID(buf.Bytes()))
 	g.mangled[k] = id
 	return id
+}
+
+func (g *gen) mangleHandle(id ir.TypeID, exported bool) ir.NameID {
+	if x, ok := g.mangledHandles[id]; ok {
+		return x
+	}
+
+	var buf buffer.Bytes
+
+	defer buf.Close()
+
+	t := g.tc.MustType(id)
+	if t.Kind() != ir.Pointer {
+		panic("internal error")
+	}
+
+	for t.Kind() == ir.Pointer {
+		switch {
+		case exported:
+			buf.WriteByte('P')
+		default:
+			buf.WriteByte('p')
+		}
+		t = t.(*ir.PointerType).Element
+	}
+	for _, v := range dict.S(int(t.ID())) {
+		switch {
+		case
+			v >= '0' && v <= '9',
+			v >= 'a' && v <= 'z',
+			v >= 'A' && v <= 'Z',
+			v == '_':
+			buf.WriteByte(v)
+		default:
+			fmt.Fprintf(&buf, "Ø%02x", v)
+		}
+	}
+	r := ir.NameID(dict.ID(buf.Bytes()))
+	g.mangledHandles[id] = r
+	return r
 }
 
 func (g *gen) w(msg string, arg ...interface{}) {
@@ -1806,9 +1849,6 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 		switch {
 		case x.Address:
 			g.w("&")
-			nfo.w++
-		default:
-			nfo.r++
 		}
 		switch {
 		case nfo.def.NameID == 0:
@@ -2085,6 +2125,28 @@ func (g *gen) emit(n *node, lastVoid bool, nextLabel int) {
 	}
 }
 
+func (g *gen) exprVars(e *exprNode) {
+	switch x := e.Op.(type) {
+	default:
+		TODO("%s: %T", x.Pos(), x)
+	}
+}
+
+func (g *gen) vars(nodes []*node) {
+	for _, n := range nodes {
+		for _, op := range n.Ops {
+			switch x := op.(type) {
+			case *expr:
+				g.exprVars(x.Expr)
+			case *ir.VariableDeclaration:
+				if x.Value != nil {
+					g.f.varNfo[x.Index].w++
+				}
+			}
+		}
+	}
+}
+
 func (g *gen) functionDefinition(oi int, f *ir.FunctionDefinition) {
 	if g.isBuiltin(oi) || f.Package != 0 {
 		return
@@ -2163,6 +2225,7 @@ func (g *gen) functionDefinition(oi int, f *ir.FunctionDefinition) {
 
 	nodes := newGraph(g, f.Body)
 	g.collectLabels(nodes)
+	g.vars(nodes)
 	for i, v := range nodes {
 		nextLabel := mathutil.MinInt
 		if i < len(nodes)-1 {
@@ -2583,7 +2646,8 @@ func (g *gen) gen() error {
 	sort.Ints(a)
 	for _, v := range a {
 		id := ir.TypeID(v)
-		g.w("\ntype %s %v // t%d %v\n", g.tm[id], g.fullType(id), g.reg(id), id)
+		nm := g.tm[id]
+		g.w("\ntype %s %v // t%d %v\n", nm, g.fullType(id), g.reg(id), id)
 	}
 more:
 	a = a[:0]
@@ -2596,7 +2660,7 @@ more:
 	for _, v := range a {
 		id := ir.TypeID(v)
 		g.w("\ntype t%d %v // %v\n", g.reg(id), g.fullType(id), id)
-		defined[id] = struct{}{}
+		//TODO- defined[id] = struct{}{}
 	}
 	if len(a) != 0 {
 		goto more
