@@ -1816,7 +1816,7 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 		}
 	case *ir.Variable:
 		if void {
-			return false
+			g.w("_ = ")
 		}
 
 		nfo := &g.f.varNfo[x.Index]
@@ -2104,18 +2104,28 @@ func (g *gen) emit(n *node, lastVoid bool, nextLabel int) {
 }
 
 func (g *gen) exprVarsLHS(n *exprNode) {
-	//fmt.Printf("\t%d: %v\n", j, n.Op)
+	if c := n.Comma; c != nil {
+		g.exprVars(c)
+	}
 	switch x := n.Op.(type) {
 	case *ir.Argument:
 		nfo := &g.f.argNfo[x.Index]
 		nfo.w++
-		//fmt.Printf("# irgo.2112: %s: r %v w %v p %v exprVarsLHS\n", n.Op.Pos(), nfo.r, nfo.w, nfo.p)
+	case *ir.Call, *ir.CallFP, *ir.Label:
+		for _, v := range n.Childs {
+			g.exprVars(v)
+		}
 	case
 		*ir.Convert,
 		*ir.Field,
-		*ir.PostIncrement:
+		*ir.Load,
+		*ir.PostIncrement,
+		*ir.PreIncrement:
 		g.exprVarsLHS(n.Childs[0])
-	case *ir.Element:
+	case
+		*ir.Add,
+		*ir.Element,
+		*ir.Store:
 		g.exprVarsLHS(n.Childs[0])
 		g.exprVars(n.Childs[1])
 	case
@@ -2126,14 +2136,80 @@ func (g *gen) exprVarsLHS(n *exprNode) {
 	case *ir.Variable:
 		nfo := &g.f.varNfo[x.Index]
 		nfo.w++
-		//fmt.Printf("# irgo.2125: %s: r %v w %v p %v exprVarsLHS\n", n.Op.Pos(), nfo.r, nfo.w, nfo.p)
+	default:
+		TODO("%s: %T", x.Pos(), x)
+	}
+}
+
+func (g *gen) exprVarsField(n *exprNode) {
+	if c := n.Comma; c != nil {
+		g.exprVars(c)
+	}
+	switch x := n.Op.(type) {
+	case *ir.Call, *ir.CallFP, *ir.Label:
+		for _, v := range n.Childs {
+			g.exprVars(v)
+		}
+	case
+		*ir.Convert,
+		*ir.Load:
+		g.exprVarsField(n.Childs[0])
+	case
+		*ir.And,
+		*ir.Element:
+		g.exprVarsField(n.Childs[0])
+		g.exprVars(n.Childs[1])
+	case *ir.Argument:
+		nfo := &g.f.argNfo[x.Index]
+		nfo.r++
+	case *ir.Field:
+		g.exprVarsField(n.Childs[0])
+	case *ir.Variable:
+		nfo := &g.f.varNfo[x.Index]
+		nfo.r++
+	case *ir.Store:
+		g.exprVarsLHS(n.Childs[0])
+		g.exprVars(n.Childs[1])
+	case *ir.Global:
+		// nop
+	default:
+		TODO("%s: %T", x.Pos(), x)
+	}
+}
+
+func (g *gen) exprVarsInc(n *exprNode) {
+	if c := n.Comma; c != nil {
+		g.exprVars(c)
+	}
+	switch x := n.Op.(type) {
+	case *ir.Field:
+		g.exprVarsField(n.Childs[0])
+	case *ir.Argument:
+		nfo := &g.f.argNfo[x.Index]
+		nfo.r++
+		nfo.w++
+	case *ir.Variable:
+		nfo := &g.f.varNfo[x.Index]
+		nfo.r++
+		nfo.w++
+	case
+		*ir.Convert,
+		*ir.Element,
+		*ir.PostIncrement,
+		*ir.PreIncrement:
+
+		g.exprVarsInc(n.Childs[0])
+	case *ir.Global:
+		// nop
 	default:
 		TODO("%s: %T", x.Pos(), x)
 	}
 }
 
 func (g *gen) exprVars(n *exprNode) {
-	//fmt.Printf("\t%d: %v\n", j, n.Op)
+	if c := n.Comma; c != nil {
+		g.exprVars(c)
+	}
 	switch x := n.Op.(type) {
 	case *ir.Argument:
 		nfo := &g.f.argNfo[x.Index]
@@ -2143,7 +2219,6 @@ func (g *gen) exprVars(n *exprNode) {
 		default:
 			nfo.r++
 		}
-		//fmt.Printf("# irgo.2142: %s: r %v w %v p %v exprVars arg\n", n.Op.Pos(), nfo.r, nfo.w, nfo.p)
 	case *ir.Call, *ir.CallFP, *ir.Label:
 		for _, v := range n.Childs {
 			g.exprVars(v)
@@ -2151,12 +2226,13 @@ func (g *gen) exprVars(n *exprNode) {
 	case
 		*ir.Bool,
 		*ir.Convert,
+		*ir.Cpl,
 		*ir.Drop,
 		*ir.Element,
-		*ir.Field,
 		*ir.Jnz,
 		*ir.Jz,
 		*ir.Load,
+		*ir.Neg,
 		*ir.Not:
 
 		g.exprVars(n.Childs[0])
@@ -2168,17 +2244,22 @@ func (g *gen) exprVars(n *exprNode) {
 		*ir.Geq,
 		*ir.Gt,
 		*ir.Leq,
+		*ir.Lsh,
 		*ir.Lt,
 		*ir.Mul,
 		*ir.Neq,
 		*ir.Or,
 		*ir.PtrDiff,
 		*ir.Rem,
+		*ir.Rsh,
 		*ir.Sub,
 		*ir.Xor:
 
 		g.exprVars(n.Childs[0])
 		g.exprVars(n.Childs[1])
+
+	case *ir.Field:
+		g.exprVarsField(n.Childs[0])
 	case
 		*ir.Copy,
 		*ir.Store:
@@ -2192,15 +2273,14 @@ func (g *gen) exprVars(n *exprNode) {
 		default:
 			nfo.r++
 		}
-		//fmt.Printf("# irgo.2176: %s: r %v w %v p %v exprVars var\n", n.Op.Pos(), nfo.r, nfo.w, nfo.p)
+	case *ir.PreIncrement, *ir.PostIncrement:
+		g.exprVarsInc(n.Childs[0])
 	case
 		*ir.Const32,
 		*ir.Const64,
 		*ir.Dup,
 		*ir.Global,
 		*ir.Nil,
-		*ir.PreIncrement,
-		*ir.PostIncrement,
 		*ir.StringConst,
 		*ir.Switch:
 
@@ -2213,7 +2293,6 @@ func (g *gen) exprVars(n *exprNode) {
 func (g *gen) vars(nodes []*node) {
 	for _, n := range nodes {
 		for _, op := range n.Ops {
-			//fmt.Printf("%v:%v: %v\n", i, j, op)
 			switch x := op.(type) {
 			case *expr:
 				g.exprVars(x.Expr)
@@ -2221,7 +2300,6 @@ func (g *gen) vars(nodes []*node) {
 				if x.Value != nil {
 					nfo := &g.f.varNfo[x.Index]
 					nfo.w++
-					//fmt.Printf("# irgo.2209: %s: r %v w %v p %v vars varDecl %v\n", op.Pos(), nfo.r, nfo.w, nfo.p, nfo.def.NameID)
 				}
 			}
 		}
@@ -2260,8 +2338,6 @@ func (g *gen) functionDefinition(oi int, f *ir.FunctionDefinition) {
 				g.w(", %v ", g.mangle(f.Arguments[i], false, -1))
 			}
 			g.w("%s", g.typ(v))
-			nfo := g.f.argNfo[i]
-			g.w("/* r %v w %v p %v */", nfo.r, nfo.w, nfo.p)
 		}
 		if ft.Variadic {
 			g.w(", args ...interface{}")
@@ -2287,29 +2363,66 @@ func (g *gen) functionDefinition(oi int, f *ir.FunctionDefinition) {
 		a = append(a, int(k))
 	}
 	sort.Ints(a)
+	var use []varNfo
 	for _, t := range a {
-		g.w("var ")
 		t := ir.TypeID(t)
 		a := m[t]
-		for i, v := range a {
+		first := true
+		for _, v := range a {
+			def := v.def
 			sc := v.scope
 			if sc == 0 {
 				sc = -1
 			}
-			if i != 0 {
-				g.w(",")
+			switch {
+			case
+				v.r == 0 && v.w == 0 && v.p == 0,
+				v.r == 0 && v.w != 0 && v.p == 0:
+
+				use = append(use, v)
 			}
 			switch {
-			case v.def.NameID == 0:
+			case first:
+				g.w("var ")
+			default:
+				g.w(",")
+			}
+			first = false
+			switch {
+			case def.NameID == 0:
 				g.w("_%v", v.i)
 			default:
-				nm := g.mangle(v.def.NameID, false, sc)
+				nm := g.mangle(def.NameID, false, sc)
 				g.w("%v", nm)
+				//g.w("/* %v %v %v */", v.r, v.w, v.p)
 			}
-			nfo := g.f.varNfo[v.i]
-			g.w("/* r %v w %v p %v */", nfo.r, nfo.w, nfo.p)
 		}
-		g.w(" %v\n", g.typ2(t))
+		if !first {
+			g.w(" %v\n", g.typ2(t))
+		}
+	}
+	for i := range use {
+		if i != 0 {
+			g.w(", ")
+		}
+		g.w("_")
+	}
+	if len(use) != 0 {
+		g.w(" = ")
+	}
+	for i, v := range use {
+		sc := v.scope
+		if sc == 0 {
+			sc = -1
+		}
+		nm := g.mangle(v.def.NameID, false, sc)
+		if i != 0 {
+			g.w(", ")
+		}
+		g.w("%v", nm)
+	}
+	if len(use) != 0 {
+		g.w("\n")
 	}
 
 	for i, v := range nodes {
@@ -2323,22 +2436,6 @@ func (g *gen) functionDefinition(oi int, f *ir.FunctionDefinition) {
 			}
 		}
 		g.emit(v, i == len(nodes)-1 && len(ft.Results) == 0, nextLabel)
-	}
-	ok := true
-	for _, v := range g.f.varNfo {
-		if v.r+v.p == 0 && v.def.NameID != 0 {
-			sc := v.scope
-			if sc == 0 {
-				sc = -1
-			}
-			nm := g.mangle(v.def.NameID, false, sc)
-			g.w("//_ = %v\n", nm)
-			fmt.Printf("%s: %v: r %v w %v p %v\n", v.def.Position, nm, v.r, v.w, v.p)
-			ok = false
-		}
-	}
-	if !ok && len(ft.Results) != 0 {
-		g.w("panic(0)\n")
 	}
 	g.w("}\n\n")
 }
@@ -2747,7 +2844,7 @@ more:
 	for _, v := range a {
 		id := ir.TypeID(v)
 		g.w("\ntype t%d %v // %v\n", g.reg(id), g.fullType(id), id)
-		//TODO- defined[id] = struct{}{}
+		defined[id] = struct{}{}
 	}
 	if len(a) != 0 {
 		goto more
