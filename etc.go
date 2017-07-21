@@ -575,14 +575,7 @@ func (g *graph) computeStackStates(m map[*node]struct{}, n *node, s stack) {
 		case *ir.Switch:
 			s = s.pop()
 		case *ir.Variable:
-			nfo := &g.gen.f.varNfo[x.Index]
-			switch {
-			case x.Address:
-				nfo.p++
-			default:
-				nfo.r++
-			}
-			s = s.pushT(g.qptrID(nfo.def.TypeID, x.Address))
+			s = s.pushT(g.qptrID(g.gen.f.varNfo[x.Index].def.TypeID, x.Address))
 		case *ir.Xor:
 			s = s.pop().pop().pushT(x.TypeID)
 		case *ir.Label:
