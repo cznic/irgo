@@ -498,6 +498,10 @@ func (g *gen) call(ft *ir.FunctionType, args []*exprNode) {
 }
 
 func (g *gen) pcmp(n *exprNode, op string) {
+	if isConst(n.Childs[0]) && isConst(n.Childs[1]) {
+		TODO("%s", n.Op.Pos())
+	}
+
 	t := g.tc.MustType(n.Childs[0].TypeID)
 	u := g.tc.MustType(n.Childs[1].TypeID)
 	if t.Kind() == ir.Pointer && t.(*ir.PointerType).Element.Kind() == ir.Function {
@@ -529,7 +533,7 @@ func (g *gen) pcmp(n *exprNode, op string) {
 		switch {
 		case t == u:
 			g.expression(n.Childs[0], false)
-			g.w("%s", op)
+			g.w(" %v ", op)
 			g.expression(n.Childs[1], false)
 		default:
 			g.convert(n.Childs[0], idVoidPtr)
@@ -540,14 +544,16 @@ func (g *gen) pcmp(n *exprNode, op string) {
 	}
 
 	// >=, >, <=, <
-	g.w("%s.P2U(", crt)
-	g.convert(n.Childs[0], idVoidPtr)
-	g.w(")%s %s.P2U(", op, crt)
-	g.convert(n.Childs[1], idVoidPtr)
-	g.w(")")
+	g.uintptr(n.Childs[0])
+	g.w("%s ", op)
+	g.uintptr(n.Childs[1])
 }
 
 func (g *gen) relop(n *exprNode) {
+	if isConst(n.Childs[0]) && isConst(n.Childs[1]) {
+		TODO("%s", n.Op.Pos())
+	}
+
 	g.w("bool2int(")
 	t := g.tc.MustType(n.Childs[0].TypeID)
 	u := g.tc.MustType(n.Childs[1].TypeID)
@@ -612,6 +618,10 @@ func (g *gen) relop(n *exprNode) {
 }
 
 func (g *gen) binop(n *exprNode) {
+	if isConst(n.Childs[0]) && isConst(n.Childs[1]) {
+		TODO("%s", n.Op.Pos())
+	}
+
 	t := g.tc.MustType(n.Childs[0].TypeID)
 	if t.Kind() == ir.Pointer {
 		if isConst(n.Childs[0]) && !isConst(n.Childs[1]) {
@@ -686,15 +696,7 @@ func (g *gen) binop(n *exprNode) {
 		}
 
 		g.w("(%v)(unsafe.Pointer(", g.typ(t))
-		switch x, ok := n.Childs[0].Op.(*ir.Convert); {
-		case ok && isIntegralType(x.TypeID):
-			g.w("uintptr")
-			g.expression(n.Childs[0].Childs[0], false)
-		default:
-			g.w("uintptr(")
-			g.convert(n.Childs[0], idVoidPtr)
-			g.w(")")
-		}
+		g.uintptr(n.Childs[0])
 		switch x := n.Op.(type) {
 		case *ir.Add:
 			g.w("+")
@@ -735,6 +737,10 @@ func (g *gen) binop(n *exprNode) {
 }
 
 func (g *gen) shift(n *exprNode) {
+	if isConst(n.Childs[0]) && isConst(n.Childs[1]) {
+		TODO("%s", n.Op.Pos())
+	}
+
 	g.expression(n.Childs[0], false)
 	switch x := n.Op.(type) {
 	case *ir.Lsh:
@@ -815,6 +821,8 @@ func (g *gen) num(n *exprNode) interface{} {
 			switch to.Kind() {
 			case ir.Int32:
 				return int32(x)
+			case ir.Pointer:
+				return uintptr(x)
 			default:
 				TODO("%s: internal error: %v", n.Op.Pos(), to)
 			}
@@ -1636,13 +1644,10 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 		if sz != 1 {
 			g.w("(")
 		}
-		g.w("uintptr(")
-		g.convert(n.Childs[0], idVoidPtr)
-		g.w(")")
+		g.uintptr(n.Childs[0])
 		if !isZeroExpr(n.Childs[1]) {
-			g.w("-uintptr(")
-			g.convert(n.Childs[1], idVoidPtr)
-			g.w(")")
+			g.w("-")
+			g.uintptr(n.Childs[1])
 		}
 		g.w(")")
 		if sz != 1 {
@@ -1728,9 +1733,8 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 				if sz != 1 {
 					s2 = fmt.Sprintf("%v*", sz)
 				}
-				g.w(") %s= %suintptr(", s, s2)
-				g.expression(e.Childs[1], false)
-				g.w(")")
+				g.w(") %s= %s", s, s2)
+				g.uintptr(e.Childs[1])
 			case *ir.Lsh:
 				g.w("*")
 				g.expression(n.Childs[0].Childs[0], false)
@@ -1985,9 +1989,9 @@ func (g *gen) convert2(e *exprNode, from, to ir.TypeID) {
 	}
 
 	if et.Kind() == ir.Pointer && isIntegralType(to) {
-		g.w("(%v)(%s.P2U(", g.typ(t), crt)
-		g.convert(e, idVoidPtr)
-		g.w("))")
+		g.w("(%v)(", g.typ(t))
+		g.uintptr(e)
+		g.w(")")
 		return
 	}
 
@@ -2010,8 +2014,8 @@ func (g *gen) convert2(e *exprNode, from, to ir.TypeID) {
 	case t.Kind() == ir.Pointer:
 		switch {
 		case isIntegralType(from):
-			g.w("%s.U2P(uintptr", crt)
-			g.expression(e, false)
+			g.w("unsafe.Pointer(")
+			g.uintptr(e)
 			g.w(")")
 		default:
 			if e.TypeID != idVoidPtr {
@@ -2601,7 +2605,7 @@ func (g *gen) value(pos token.Position, id ir.TypeID, v ir.Value) {
 			case 0:
 				g.w("nil")
 			default:
-				g.w("(%v)(%s.U2P(%v))", g.typ(t), crt, uintptr(x.Value))
+				g.w("(%v)(unsafe.Pointer(uintptr(%v)))", g.typ(t), uintptr(x.Value))
 			}
 		case ir.Int8:
 			g.w("int8(%v)", int8(x.Value))
@@ -2633,7 +2637,7 @@ func (g *gen) value(pos token.Position, id ir.TypeID, v ir.Value) {
 			case 0:
 				g.w("nil")
 			default:
-				g.w("(%v)(%s.U2P(%v))", g.typ(t), crt, uintptr(x.Value))
+				g.w("(%v)(unsafe.Pointer(uintptr(%v)))", g.typ(t), uintptr(x.Value))
 			}
 		case ir.Int8:
 			g.w("int8(%v)", int8(x.Value))
