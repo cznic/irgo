@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -42,8 +43,13 @@ var (
 	dict = xc.Dict
 )
 
+func internalError(msg string, more ...interface{}) error {
+	_, fn, fl, _ := runtime.Caller(1)
+	return fmt.Errorf("%s:%d: internal error %v\n%s", path.Base(fn), fl, fmt.Sprintf(msg, more...), debug.Stack())
+}
+
 //TODO remove me.
-func TODO(msg string, more ...interface{}) string { //TODOOK
+func TODO(msg string, more ...interface{}) { //TODOOK
 	_, fn, fl, _ := runtime.Caller(1)
 	fmt.Fprintf(os.Stderr, "%s:%d: %v\n", path.Base(fn), fl, fmt.Sprintf(msg, more...))
 	os.Stderr.Sync()
@@ -188,7 +194,7 @@ func (g *gen) mangle2(pkg, nm ir.NameID, exported bool, index int) ir.NameID {
 	switch {
 	case exported:
 		if index >= 0 {
-			panic("internal error")
+			panic(internalError(""))
 		}
 
 		if pkg != 0 {
@@ -216,7 +222,77 @@ func (g *gen) mangle2(pkg, nm ir.NameID, exported bool, index int) ir.NameID {
 	return id
 }
 
-func (g *gen) mangleHandle(id ir.TypeID, exported bool) ir.NameID {
+func (g *gen) mangleHandle0(buf *buffer.Bytes, t ir.Type) {
+	if x, ok := g.tm[t.ID()]; ok {
+		escString(buf, x)
+		return
+	}
+
+	if t.ID() == idVoid {
+		buf.WriteString("void")
+		return
+	}
+
+	sou := byte('S')
+	switch k := t.Kind(); k {
+	case ir.Array:
+		buf.WriteByte('A')
+		u := t.(*ir.ArrayType)
+		fmt.Fprintf(buf, "%v", u.Items)
+		g.mangleHandle0(buf, u.Item)
+		buf.WriteByte('Z')
+	case ir.Function:
+		buf.WriteByte('F')
+		u := t.(*ir.FunctionType)
+		for _, v := range u.Arguments {
+			buf.WriteByte('A')
+			g.mangleHandle0(buf, v)
+		}
+		for _, v := range u.Results {
+			buf.WriteByte('R')
+			g.mangleHandle0(buf, v)
+		}
+		buf.WriteByte('Z')
+	case ir.Pointer:
+		buf.WriteByte('P')
+		g.mangleHandle0(buf, t.(*ir.PointerType).Element)
+	case ir.Union:
+		sou = 'U'
+	case ir.Struct:
+		buf.WriteByte(sou)
+		u := t.(*ir.StructOrUnionType)
+		for i, v := range u.Names {
+			buf.WriteByte('F')
+			escBytes(buf, dict.S(int(v)))
+			buf.WriteByte('T')
+			g.mangleHandle0(buf, u.Fields[i])
+		}
+		buf.WriteByte('Z')
+	case
+		ir.Complex64,
+		ir.Complex128,
+		ir.Float32,
+		ir.Float64,
+		ir.Int16,
+		ir.Int32,
+		ir.Int64,
+		ir.Int8,
+		ir.Uint16,
+		ir.Uint32,
+		ir.Uint64,
+		ir.Uint8:
+
+		buf.Write(dict.S(int(t.ID())))
+	default:
+		TODO("%s", t.Kind())
+	}
+}
+
+func (g *gen) mangleHandle(id ir.TypeID) ir.NameID {
+	if id == idVoidPtr {
+		return idUinptr
+	}
+
 	if x, ok := g.mangledHandles[id]; ok {
 		return x
 	}
@@ -227,30 +303,17 @@ func (g *gen) mangleHandle(id ir.TypeID, exported bool) ir.NameID {
 
 	t := g.tc.MustType(id)
 	if t.Kind() != ir.Pointer {
-		panic("internal error")
+		t = t.Pointer()
 	}
 
-	for t.Kind() == ir.Pointer {
-		switch {
-		case exported:
-			buf.WriteByte('P')
-		default:
-			buf.WriteByte('p')
-		}
+	u := t
+	for u.Kind() == ir.Pointer {
+		u = u.(*ir.PointerType).Element
+	}
+	if u.Kind() == ir.Function {
 		t = t.(*ir.PointerType).Element
 	}
-	for _, v := range dict.S(int(t.ID())) {
-		switch {
-		case
-			v >= '0' && v <= '9',
-			v >= 'a' && v <= 'z',
-			v >= 'A' && v <= 'Z',
-			v == '_':
-			buf.WriteByte(v)
-		default:
-			fmt.Fprintf(&buf, "Ø%02x", v)
-		}
-	}
+	g.mangleHandle0(&buf, t)
 	r := ir.NameID(dict.ID(buf.Bytes()))
 	g.mangledHandles[id] = r
 	return r
@@ -592,7 +655,7 @@ func (g *gen) relop(n *exprNode) {
 
 			g.pcmp(n, "!=")
 		default:
-			panic("internal error")
+			panic(internalError(""))
 		}
 	default:
 		g.expression(n.Childs[0], false)
@@ -610,7 +673,7 @@ func (g *gen) relop(n *exprNode) {
 		case *ir.Neq:
 			g.w("!=")
 		default:
-			panic("internal error")
+			panic(internalError(""))
 		}
 		g.expression(n.Childs[1], false)
 	}
@@ -841,7 +904,7 @@ func (g *gen) num(n *exprNode) interface{} {
 	default:
 		TODO("%s: internal error: %T", x.Pos(), x)
 	}
-	panic("internal error")
+	panic(internalError(""))
 }
 
 func (g *gen) uint(n *exprNode) {
@@ -1138,7 +1201,7 @@ func (g *gen) convConst(to ir.TypeID, n *exprNode) {
 		g.complex64(n)
 	default:
 		TODO("%s: internal error: %v", n.Op.Pos(), to)
-		panic("internal error")
+		panic(internalError(""))
 	}
 }
 
@@ -1505,7 +1568,7 @@ func (g *gen) expression2(n *exprNode, void bool, nextLabel int) bool {
 		case x.LOr:
 			g.w("||")
 		default:
-			panic("internal error")
+			panic(internalError(""))
 		}
 		g.expression(n.Childs[1], false)
 		g.w("!= 0)")
@@ -2340,16 +2403,31 @@ func (g *gen) functionDefinition(oi int, f *ir.FunctionDefinition) {
 		for i, v := range ft.Arguments {
 			if i < len(f.Arguments) {
 				g.w(", %v ", g.mangle(f.Arguments[i], false, -1))
+				nfo := g.f.argNfo[i]
+				if nfo.p != 0 {
+					g.w("/*TODO2404 %v */", g.mangleHandle(v.ID()))
+				}
 			}
+			if i < len(ft.Arguments)-1 && v.ID() == ft.Arguments[i+1].ID() {
+				continue
+			}
+
 			g.w("%s", g.typ(v))
+			if v.Kind() == ir.Pointer {
+				g.w("/*TODO2355 %v */", g.mangleHandle(v.ID()))
+			}
 		}
 		if ft.Variadic {
 			g.w(", args ...interface{}")
 		}
 		g.w(")")
-		if len(ft.Results) != 0 {
-			//TODO support multiple results.
+		switch len(ft.Results) {
+		case 0:
+			// ok
+		case 1:
 			g.w("(r0 %s)", g.typ(ft.Results[0]))
+		default:
+			TODO("%s:", f.Position)
 		}
 	}
 	g.w("{\n")
@@ -2370,7 +2448,9 @@ func (g *gen) functionDefinition(oi int, f *ir.FunctionDefinition) {
 	var use []varNfo
 	for _, t := range a {
 		t := ir.TypeID(t)
+		u := g.tc.MustType(t)
 		a := m[t]
+		var pa []varNfo
 		first := true
 		for _, v := range a {
 			def := v.def
@@ -2385,6 +2465,11 @@ func (g *gen) functionDefinition(oi int, f *ir.FunctionDefinition) {
 
 				use = append(use, v)
 			}
+			if v.p != 0 || u.Kind() == ir.Pointer {
+				pa = append(pa, v)
+				continue
+			}
+
 			switch {
 			case first:
 				g.w("var ")
@@ -2403,6 +2488,32 @@ func (g *gen) functionDefinition(oi int, f *ir.FunctionDefinition) {
 		}
 		if !first {
 			g.w(" %v\n", g.typ2(t))
+		}
+		first = true
+		for _, v := range pa {
+			def := v.def
+			sc := v.scope
+			if sc == 0 {
+				sc = -1
+			}
+			switch {
+			case first:
+				g.w("var ")
+			default:
+				g.w(",")
+			}
+			first = false
+			switch {
+			case def.NameID == 0:
+				g.w("_%v", v.i)
+			default:
+				nm := g.mangle(def.NameID, false, sc)
+				g.w("%v", nm)
+				//g.w("/* %v %v %v */", v.r, v.w, v.p)
+			}
+		}
+		if !first {
+			g.w(" %v /*TODO2449 %v */\n", g.typ2(t), g.mangleHandle(t.ID()))
 		}
 	}
 	for i := range use {
@@ -2784,7 +2895,7 @@ func (g *gen) gen() error {
 		case *ir.DataDefinition:
 			g.dataDefinition(x)
 		default:
-			panic("internal error")
+			panic(internalError(""))
 		}
 	}
 	g.w("func bool2int(b bool) int32 { if b { return 1}; return 0 }\n")

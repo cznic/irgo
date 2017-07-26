@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"sort"
 
+	"github.com/cznic/internal/buffer"
 	"github.com/cznic/ir"
 	"github.com/cznic/sortutil"
 	"github.com/cznic/strutil"
@@ -29,12 +30,14 @@ var (
 	idInt8Ptr   = ir.TypeID(dict.SID("*int8"))
 	idMain      = ir.NameID(dict.SID("main"))
 	idPVoidPtr  = ir.TypeID(dict.SID("**struct{}"))
+	idUinptr    = ir.NameID(dict.SID("uintptr"))
 	idUint16    = ir.TypeID(dict.SID("uint16"))
 	idUint32    = ir.TypeID(dict.SID("uint32"))
 	idUint64    = ir.TypeID(dict.SID("uint64"))
 	idUint8     = ir.TypeID(dict.SID("uint8"))
 	idUint8Ptr  = ir.TypeID(dict.SID("*uint8"))
 	idVaList    = ir.TypeID(dict.SID("*struct{_ struct{}}"))
+	idVoid      = ir.TypeID(dict.SID("struct{}"))
 	idVoidPtr   = ir.TypeID(dict.SID("*struct{}"))
 
 	hooks = strutil.PrettyPrintHooks{
@@ -486,7 +489,7 @@ func (g *graph) computeStackStates(m map[*node]struct{}, n *node, s stack) {
 					t = t.(*ir.ArrayType).Item
 				}
 			default:
-				panic("internal error")
+				panic(internalError(""))
 			}
 			s = s.pop().pushT(g.qptrID(t.ID(), x.Address))
 		case *ir.Field:
@@ -812,7 +815,7 @@ func varInfo(ops []ir.Operation) (nfo []varNfo) {
 		}
 	}
 	if len(a) != 0 {
-		panic("internal error")
+		panic(internalError(""))
 	}
 	return nfo
 }
@@ -838,7 +841,7 @@ func (s switchPairs) Less(i, j int) bool {
 	default:
 		TODO("%T", x)
 	}
-	panic("internal error")
+	panic(internalError(""))
 }
 
 func (s switchPairs) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
@@ -886,7 +889,7 @@ func isZeroValue(v ir.Value) bool {
 	default:
 		TODO("isZeroValue %T", x)
 	}
-	panic("internal error")
+	panic(internalError(""))
 }
 
 func isIntegralType(t ir.TypeID) bool {
@@ -954,5 +957,27 @@ func isConst(n *exprNode) bool {
 		return isConst(n.Childs[0])
 	default:
 		return false
+	}
+}
+
+func escByte(buf *buffer.Bytes, b byte) {
+	switch {
+	case b >= '0' || b <= '9' || b == '_' || b >= 'a' || b <= 'z' || b >= 'A' || b <= 'Z':
+		buf.WriteByte(b)
+		return
+	}
+
+	fmt.Fprintf(buf, "Ø%02x", b)
+}
+
+func escString(buf *buffer.Bytes, s string) {
+	for i := 0; i < len(s); i++ {
+		escByte(buf, s[i])
+	}
+}
+
+func escBytes(buf *buffer.Bytes, s []byte) {
+	for _, v := range s {
+		escByte(buf, v)
 	}
 }
