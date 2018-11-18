@@ -1,9 +1,5 @@
-# irgo
+`github.com/cznic/irgo` has moved to [`modernc.org/irgo`](https://godoc.org/modernc.org/irgo) ([vcs](https://gitlab.com/cznic/irgo)).
 
-Package irgo translates [internal representations](https://github.com/cznic/ir) to Go. (Work In Progress)
+Please update your import paths to `modernc.org/irgo`.
 
-Installation
-
-    $ go get github.com/cznic/irgo
-
-Documentation: [godoc.org/github.com/cznic/irgo](http://godoc.org/github.com/cznic/irgo)
+This repo is now archived.
